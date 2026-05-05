@@ -1,0 +1,35 @@
+Tolong update script MpFinex saya dengan ketentuan LENGKAP di bawah ini. Kerjakan semua bagian dari 1 sampai 5 secara berurutan. JANGAN hapus kode existing, hanya tambah atau modifikasi sesuai instruksi.
+
+================================================================================
+BAGIAN 1: KEAMANAN (WAJIB SEBELUM LIVE TRADING)
+================================================================================
+
+### A. Daily Loss Limit
+- Tambahkan file `internal/bot/risk.go`
+- Isi: struct RiskLimits dengan field MaxDailyLossPercent (float64), DailyLoss (float64), InitialEquity (float64), LastReset (time.Time)
+- Fungsi `CheckDailyLoss(currentEquity float64) bool`: 
+  * Reset dailyLoss setiap hari baru (bandingkan tanggal)
+  * Hitung loss hari ini = InitialEquity - currentEquity
+  * Jika loss > (MaxDailyLossPercent/100 * InitialEquity), tutup semua posisi via bot.CloseAllPositions() dan return false (stop trading)
+- Panggil fungsi ini di `internal/bot/bot.go` sebelum setiap entry order baru
+
+### B. Max Drawdown Trailing
+- Di struct yang sama, tambahkan MaxDrawdownPercent (float64)
+- Di fungsi `CheckDrawdown(currentEquity float64) bool`:
+  * Hitung drawdown dari peak equity tertinggi
+  * Jika drawdown > MaxDrawdownPercent, tutup semua posisi dan bot berhenti
+
+### C. Enkripsi Credentials
+- Buat `internal/config/encrypt.go`
+- Gunakan AES-256-GCM dengan key dari environment variable `ENCRYPTION_KEY` (32 byte)
+- Fungsi `EncryptCredentials(login, password, server string) (ciphertext string, err error)`
+- Fungsi `DecryptCredentials(ciphertext string) (login, password, server string, err error)`
+- Ubah `config.go` agar menyimpan credential terenkripsi di `bots.json`, bukan plain text
+- Tambahkan validasi: jika ENCRYPTION_KEY tidak ada di environment, program exit dengan pesan error
+
+### D. Connection Watchdog
+- Buat `internal/mt5/heartbeat.go`
+- Fungsi `StartHeartbeat(client *Client, interval time.Duration)`
+- Kirim ping setiap 3 detik, jika 2 kali berturut-turut gagal → trigger reconnect
+- Reconnect dengan exponential backoff: 1s, 2s, 4s, 8s, max 3x percobaan
+- Jika reconnect gagal setelah 3x, log "MT5 disconnected permanently" dan shutdown program dengan aman (tutup semua posisi)
