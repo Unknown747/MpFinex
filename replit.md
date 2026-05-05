@@ -268,12 +268,35 @@ Set via Replit Secrets / userenv:
 - **bots.json** — gitignored, per-user state, auto-created on first bot save
 - **MT5 connection** — authenticates via SRP-6a but does NOT place real orders (simulation only)
 
+## Telegram Bot Integration
+
+File: `internal/telegram/bot.go`
+
+- Aktif otomatis jika `TELEGRAM_BOT_TOKEN` dan `TELEGRAM_CHAT_ID` diset sebagai Replit Secrets
+- Hanya menerima perintah dari chat ID yang terdaftar (keamanan)
+- Mengirim notifikasi otomatis saat trade buka/tutup
+
+| Perintah | Fungsi |
+|---|---|
+| `/help` | Tampilkan daftar perintah |
+| `/status` | Status MT5, mode, bot aktif, saldo |
+| `/bots` | Daftar semua bot dan statusnya |
+| `/startbot <nama>` | Mulai bot berdasarkan nama |
+| `/stopbot <nama>` | Hentikan bot berdasarkan nama |
+| `/trades` | Posisi yang sedang terbuka |
+| `/balance` | Saldo akun saat ini |
+
+Notifikasi otomatis dikirim ke Telegram saat:
+- Trade dibuka (entry price, pair, side)
+- Trade ditutup (P&L pip, P&L USD, alasan, durasi)
+
 ## Dependencies
 
 ```
-github.com/charmbracelet/bubbles   — text input component
-github.com/charmbracelet/bubbletea — Elm-architecture TUI framework
-github.com/charmbracelet/lipgloss  — terminal styling
+github.com/charmbracelet/bubbles              — text input component
+github.com/charmbracelet/bubbletea            — Elm-architecture TUI framework
+github.com/charmbracelet/lipgloss             — terminal styling
+github.com/go-telegram-bot-api/telegram-bot-api/v5 — Telegram Bot API
 ```
 
 ## Tab Structure
