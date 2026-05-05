@@ -28,6 +28,7 @@ import (
         "github.com/finex/finex-cli/internal/optimizer"
         "github.com/finex/finex-cli/internal/risk"
         "github.com/finex/finex-cli/internal/telegram"
+        "github.com/finex/finex-cli/internal/utils"
 )
 
 // ─── Tick ───────────────────────────────────────────────────────────────────
@@ -958,171 +959,158 @@ func totalPnLBefore(b *botpkg.Bot) float64 {
         return prev
 }
 
+// tgBotStatuses converts the live bot slice into lightweight BotStatus structs
+// for the Telegram UI layer (avoids circular imports).
+func (m *Model) tgBotStatuses() []telegram.BotStatus {
+        out := make([]telegram.BotStatus, len(m.bots))
+        for i, b := range m.bots {
+                wr := 0.0
+                if b.WinCount+b.LossCount > 0 {
+                        wr = float64(b.WinCount) / float64(b.WinCount+b.LossCount) * 100
+                }
+                out[i] = telegram.BotStatus{
+                        Index:     i,
+                        Name:      b.Name,
+                        Symbol:    b.Symbol,
+                        Strategy:  string(b.Strategy),
+                        Running:   b.IsRunning,
+                        TotalPnL:  b.TotalPnL,
+                        WinRate:   wr,
+                        WinCount:  b.WinCount,
+                        LossCount: b.LossCount,
+                }
+        }
+        return out
+}
+
+// tgMode returns the mode string shown in Telegram ("DEMO", "REAL", "DRY-RUN").
+func (m *Model) tgMode() string {
+        if m.dryRun {
+                return "DRY-RUN"
+        }
+        if m.useReal {
+                return "REAL"
+        }
+        return "DEMO"
+}
+
+// tgRunningCount returns how many bots are currently running.
+func (m *Model) tgRunningCount() int {
+        n := 0
+        for _, b := range m.bots {
+                if b.IsRunning {
+                        n++
+                }
+        }
+        return n
+}
+
+// tgDrawdown returns the current drawdown percentage.
+func (m *Model) tgDrawdown(equity float64) float64 {
+        if m.peakEquity <= 0 {
+                return 0
+        }
+        dd := (m.peakEquity - equity) / m.peakEquity * 100
+        if dd < 0 {
+                dd = 0
+        }
+        return dd
+}
+
 // handleTelegramCmd processes a command received from the Telegram bot and
-// sends a reply back to the user via the Telegram API.
+// sends a reply — either as a new message or by editing the triggering message
+// in-place (when cmd.MsgID > 0, i.e. the command came from an inline button).
 func (m *Model) handleTelegramCmd(cmd telegram.Command) {
         tg := m.tgBot
         acc := m.currentAccount()
+        mode := m.tgMode()
+        mt5Stat := m.mt5Client.Status.String()
+        session := utils.ActiveSessionName()
+        running := m.tgRunningCount()
+        dd := m.tgDrawdown(acc.Equity)
+
+        // sendOrEdit edits the triggering message in-place (button tap → cmd.MsgID > 0)
+        // or sends a new message (text command → cmd.MsgID == 0).
+        sendOrEdit := func(text string, kb interface{}) {
+                tg.SendOrEditAny(cmd.MsgID, text, kb)
+        }
 
         switch cmd.Type {
+
+        // ── Main dashboard ─────────────────────────────────────────────────────
         case telegram.CmdHelp:
-                tg.Send(telegram.HelpText())
+                text := telegram.DashboardText(mode, mt5Stat, acc.Balance, acc.Equity, running, len(m.bots), session)
+                sendOrEdit(text, telegram.MainMenuKeyboard())
 
-        case telegram.CmdBalance:
-                mode := "DEMO"
-                if m.useReal {
-                        mode = "REAL"
-                }
-                tg.Send(fmt.Sprintf(
-                        "💰 <b>Saldo Akun (%s)</b>\n"+
-                                "Balance: <b>$%.2f</b>\n"+
-                                "Equity:  <b>$%.2f</b>",
-                        mode, acc.Balance, acc.Equity,
-                ))
-
+        // ── Account status ─────────────────────────────────────────────────────
         case telegram.CmdStatus:
-                mt5Stat := m.mt5Client.Status.String()
-                running := 0
-                for _, b := range m.bots {
-                        if b.IsRunning {
-                                running++
-                        }
-                }
-                mode := "DEMO"
-                if m.dryRun {
-                        mode = "DRY-RUN"
-                }
-                tg.Send(fmt.Sprintf(
-                        "📊 <b>Status Finex CLI</b>\n"+
-                                "Mode: %s\n"+
-                                "MT5: %s\n"+
-                                "Bot aktif: %d / %d\n"+
-                                "Balance: $%.2f | Equity: $%.2f",
-                        mode, mt5Stat,
-                        running, len(m.bots),
-                        acc.Balance, acc.Equity,
-                ))
+                text := telegram.StatusText(mode, mt5Stat, acc.Balance, acc.Equity, dd, running, len(m.bots), session)
+                sendOrEdit(text, telegram.BackMenuKeyboard())
 
+        // ── Balance ────────────────────────────────────────────────────────────
+        case telegram.CmdBalance:
+                text := telegram.BalanceText(mode, acc.Balance, acc.Equity)
+                sendOrEdit(text, telegram.BackMenuKeyboard())
+
+        // ── Bot management list ────────────────────────────────────────────────
         case telegram.CmdBots:
-                if len(m.bots) == 0 {
-                        tg.Send("Tidak ada bot yang terdaftar.")
-                        return
-                }
-                lines := "🤖 <b>Daftar Bot</b>\n\n"
-                for _, b := range m.bots {
-                        status := "⏹ STOP"
-                        if b.IsRunning {
-                                status = "▶️ JALAN"
-                        }
-                        openInfo := ""
-                        if b.OpenTrade != nil {
-                                openInfo = fmt.Sprintf(" | Open: %s %.5f", string(b.OpenTrade.Side), b.OpenTrade.EntryPrice)
-                        }
-                        lines += fmt.Sprintf(
-                                "%s <b>%s</b> (%s)\n"+
-                                        "  %s | P&amp;L: $%+.2f | W:%d L:%d%s\n\n",
-                                status, b.Name, b.Symbol,
-                                string(b.Strategy), b.TotalPnL, b.WinCount, b.LossCount,
-                                openInfo,
-                        )
-                }
-                tg.Send(lines)
+                statuses := m.tgBotStatuses()
+                text := telegram.BotListText(statuses)
+                sendOrEdit(text, telegram.BotListKeyboard(statuses))
 
-        case telegram.CmdStart:
-                arg := strings.TrimSpace(cmd.Arg)
-                if arg == "" {
-                        // Tanpa argumen → start semua bot
-                        started := 0
-                        lines := "▶️ <b>Semua bot dimulai:</b>\n\n"
-                        for _, b := range m.bots {
-                                if !b.IsRunning {
-                                        b.IsRunning = true
-                                        if m.log != nil {
-                                                m.log.BotStart(b.ID, b.Name, b.Symbol, string(b.Strategy))
-                                        }
-                                        started++
-                                }
-                                icon := "🟢"
-                                if !b.IsRunning {
-                                        icon = "🔴"
-                                }
-                                lines += fmt.Sprintf("%s <b>%s</b> — %s (%s)\n", icon, b.Name, b.Symbol, b.Strategy)
-                        }
-                        if started == 0 {
-                                tg.Send("⚠️ Semua bot sudah berjalan.")
-                        } else {
-                                tg.Send(lines)
-                        }
-                } else {
-                        // Dengan argumen → start satu bot by name
-                        found := false
-                        for _, b := range m.bots {
-                                if strings.Contains(strings.ToLower(b.Name), strings.ToLower(arg)) {
-                                        found = true
-                                        if b.IsRunning {
-                                                tg.Send(fmt.Sprintf("⚠️ Bot <b>%s</b> sudah berjalan.", b.Name))
-                                        } else {
-                                                b.IsRunning = true
-                                                if m.log != nil {
-                                                        m.log.BotStart(b.ID, b.Name, b.Symbol, string(b.Strategy))
-                                                }
-                                                tg.Send(fmt.Sprintf("▶️ Bot <b>%s</b> (%s) dimulai.", b.Name, b.Symbol))
-                                        }
-                                        break
-                                }
-                        }
-                        if !found {
-                                tg.Send(fmt.Sprintf("❓ Bot <b>%s</b> tidak ditemukan. Ketik /bots untuk daftar.", arg))
-                        }
-                }
-
-        case telegram.CmdStop:
-                arg := strings.TrimSpace(cmd.Arg)
-                if arg == "" {
-                        // Tanpa argumen → stop semua bot
-                        stopped := 0
-                        lines := "⏹ <b>Semua bot dihentikan:</b>\n\n"
-                        for _, b := range m.bots {
+        // ── Toggle individual bot by index (inline button) ─────────────────────
+        case telegram.CmdToggle:
+                idx := -1
+                fmt.Sscanf(strings.TrimSpace(cmd.Arg), "%d", &idx)
+                if idx >= 0 && idx < len(m.bots) {
+                        b := m.bots[idx]
+                        b.IsRunning = !b.IsRunning
+                        if m.log != nil {
                                 if b.IsRunning {
-                                        b.IsRunning = false
-                                        if m.log != nil {
-                                                m.log.BotStop(b.ID, b.Name, b.TotalPnL, b.WinCount, b.LossCount)
-                                        }
-                                        stopped++
+                                        m.log.BotStart(b.ID, b.Name, b.Symbol, string(b.Strategy))
+                                } else {
+                                        m.log.BotStop(b.ID, b.Name, b.TotalPnL, b.WinCount, b.LossCount)
                                 }
-                                lines += fmt.Sprintf("⚫ <b>%s</b> — %s\n", b.Name, b.Symbol)
-                        }
-                        if stopped == 0 {
-                                tg.Send("⚠️ Semua bot sudah berhenti.")
-                        } else {
-                                tg.Send(lines)
-                        }
-                } else {
-                        // Dengan argumen → stop satu bot by name
-                        found := false
-                        for _, b := range m.bots {
-                                if strings.Contains(strings.ToLower(b.Name), strings.ToLower(arg)) {
-                                        found = true
-                                        if !b.IsRunning {
-                                                tg.Send(fmt.Sprintf("⚠️ Bot <b>%s</b> sudah berhenti.", b.Name))
-                                        } else {
-                                                b.IsRunning = false
-                                                if m.log != nil {
-                                                        m.log.BotStop(b.ID, b.Name, b.TotalPnL, b.WinCount, b.LossCount)
-                                                }
-                                                tg.Send(fmt.Sprintf("⏹ Bot <b>%s</b> (%s) dihentikan.", b.Name, b.Symbol))
-                                        }
-                                        break
-                                }
-                        }
-                        if !found {
-                                tg.Send(fmt.Sprintf("❓ Bot <b>%s</b> tidak ditemukan. Ketik /bots untuk daftar.", arg))
                         }
                 }
+                // Refresh bot list in-place
+                statuses := m.tgBotStatuses()
+                text := telegram.BotListText(statuses)
+                sendOrEdit(text, telegram.BotListKeyboard(statuses))
 
+        // ── Start bots ─────────────────────────────────────────────────────────
+        case telegram.CmdStart:
+                for _, b := range m.bots {
+                        if !b.IsRunning {
+                                b.IsRunning = true
+                                if m.log != nil {
+                                        m.log.BotStart(b.ID, b.Name, b.Symbol, string(b.Strategy))
+                                }
+                        }
+                }
+                statuses := m.tgBotStatuses()
+                text := telegram.BotListText(statuses)
+                sendOrEdit(text, telegram.BotListKeyboard(statuses))
+
+        // ── Stop bots ──────────────────────────────────────────────────────────
+        case telegram.CmdStop:
+                for _, b := range m.bots {
+                        if b.IsRunning {
+                                b.IsRunning = false
+                                if m.log != nil {
+                                        m.log.BotStop(b.ID, b.Name, b.TotalPnL, b.WinCount, b.LossCount)
+                                }
+                        }
+                }
+                statuses := m.tgBotStatuses()
+                text := telegram.BotListText(statuses)
+                sendOrEdit(text, telegram.BotListKeyboard(statuses))
+
+        // ── Open trades ────────────────────────────────────────────────────────
         case telegram.CmdTrades:
+                const tDiv = "──────────────────────\n"
                 openCount := 0
-                lines := "📈 <b>Posisi Terbuka</b>\n\n"
+                lines := "📈 <b>POSISI TERBUKA</b>\n" + "━━━━━━━━━━━━━━━━━━━━━━\n"
                 for _, b := range m.bots {
                         if b.OpenTrade == nil {
                                 continue
@@ -1138,22 +1126,37 @@ func (m *Model) handleTelegramCmd(cmd telegram.Command) {
                                         unrealized = (t.EntryPrice - p.Price) * t.Quantity
                                 }
                         }
+                        sideIcon := "🟢"
+                        if t.Side == botpkg.Sell {
+                                sideIcon = "🔴"
+                        }
+                        pnlIcon := "📈"
+                        if unrealized < 0 {
+                                pnlIcon = "📉"
+                        }
                         dur := telegram.FormatDuration(time.Since(t.OpenedAt))
                         lines += fmt.Sprintf(
-                                "<b>%s</b> %s %s\n"+
-                                        "Entry: %.5f | Unrealized: <b>$%+.2f</b>\n"+
-                                        "Durasi: %s\n\n",
-                                b.Name, t.Symbol, string(t.Side),
-                                t.EntryPrice, unrealized,
+                                "<b>%s</b>  %s %s %s\n"+
+                                        "   Entry  : <code>%.5f</code>\n"+
+                                        "   %s P&amp;L : <code>$%+.2f</code>\n"+
+                                        "   ⏱ Durasi: %s\n"+tDiv,
+                                b.Name, sideIcon, t.Symbol, string(t.Side),
+                                t.EntryPrice,
+                                pnlIcon, unrealized,
                                 dur,
                         )
                 }
                 if openCount == 0 {
-                        tg.Send("📈 Tidak ada posisi terbuka saat ini.")
-                } else {
-                        tg.Send(lines)
+                        lines = "📈 <b>POSISI TERBUKA</b>\n" + "━━━━━━━━━━━━━━━━━━━━━━\n" +
+                                "Tidak ada posisi terbuka saat ini."
                 }
+                sendOrEdit(lines, telegram.TradesBackKeyboard())
 
+        // ── Optimize symbol picker menu ────────────────────────────────────────
+        case telegram.CmdOptimizeMenu:
+                sendOrEdit(telegram.OptimizeMenuText(), telegram.OptimizeKeyboard())
+
+        // ── Run GA optimizer ───────────────────────────────────────────────────
         case telegram.CmdOptimize:
                 symbol := strings.ToUpper(strings.TrimSpace(cmd.Arg))
                 validSymbols := map[string]bool{
@@ -1161,23 +1164,28 @@ func (m *Model) handleTelegramCmd(cmd telegram.Command) {
                         "USDCAD": true, "USDCHF": true, "EURGBP": true, "EURJPY": true,
                 }
                 if symbol == "" {
-                        tg.Send("⚠️ Gunakan: /optimize &lt;SYMBOL&gt;\nContoh: /optimize EURUSD\n\nSimbol tersedia: EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, EURGBP, EURJPY")
+                        sendOrEdit(telegram.OptimizeMenuText(), telegram.OptimizeKeyboard())
                         return
                 }
                 if !validSymbols[symbol] {
-                        tg.Send(fmt.Sprintf("❓ Simbol <b>%s</b> tidak dikenal.\nSimbol tersedia: EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, EURGBP, EURJPY", symbol))
+                        tg.Send(fmt.Sprintf("❓ Simbol <b>%s</b> tidak dikenal.", symbol))
                         return
                 }
                 if !atomic.CompareAndSwapInt32(m.optimizerBusy, 0, 1) {
                         tg.Send("⏳ Optimizer sedang berjalan. Tunggu sebentar hingga selesai.")
                         return
                 }
-                tg.Send(fmt.Sprintf(
-                        "⚙️ <b>Optimizer GA dimulai untuk %s</b>\n"+
-                                "Menjalankan 4 strategi × 10 generasi × 20 kromosom...\n"+
-                                "Ini mungkin butuh 1–2 menit. Hasil dikirim otomatis saat selesai.",
+                runningText := fmt.Sprintf(
+                        "⚙️ <b>OPTIMIZER BERJALAN</b>\n"+
+                                "━━━━━━━━━━━━━━━━━━━━━━\n"+
+                                "📌 Simbol : <b>%s</b>\n"+
+                                "🔬 Proses  : 4 strategi × 10 gen × 20 kromosom\n"+
+                                "⏱ Estimasi: 1–2 menit\n"+
+                                "━━━━━━━━━━━━━━━━━━━━━━\n"+
+                                "<i>Hasil dikirim otomatis ke chat ini.</i>",
                         symbol,
-                ))
+                )
+                tg.Send(runningText)
                 mkt := m.mkt
                 busyFlag := m.optimizerBusy
                 go func() {
@@ -1188,20 +1196,19 @@ func (m *Model) handleTelegramCmd(cmd telegram.Command) {
                                 tg.Send(fmt.Sprintf("❌ Tidak ada data candle untuk <b>%s</b>.", symbol))
                                 return
                         }
-                        type stratResult struct {
-                                name   string
-                                result optimizer.OptimizedResult
-                        }
                         results := make([]optimizer.OptimizedResult, 0, len(strategies))
-                        lines := fmt.Sprintf("✅ <b>Hasil Optimizer — %s</b>\n\n", symbol)
+                        out := fmt.Sprintf("✅ <b>HASIL OPTIMIZER — %s</b>\n━━━━━━━━━━━━━━━━━━━━━━\n", symbol)
                         for _, strat := range strategies {
                                 r := optimizer.Optimize(symbol, strat, candles)
                                 results = append(results, r)
-                                lines += fmt.Sprintf(
+                                out += fmt.Sprintf(
                                         "<b>%s</b>\n"+
-                                                "  Fitness: %.4f | WinRate: %.1f%% | PF: %.2f\n"+
-                                                "  RSI(%d) buy&lt;%.0f sell&gt;%.0f\n"+
-                                                "  EMA(%d/%d) | BB(%d, %.1fσ)\n\n",
+                                                "   Fitness    : <code>%.4f</code>\n"+
+                                                "   Win Rate   : <code>%.1f%%</code>\n"+
+                                                "   Profit Fct : <code>%.2f</code>\n"+
+                                                "   RSI(%d) &lt;%.0f / &gt;%.0f\n"+
+                                                "   EMA(%d/%d) | BB(%d, %.1fσ)\n"+
+                                                "──────────────────────\n",
                                         strat,
                                         r.Fitness, r.WinRate, r.ProfitFactor,
                                         r.Params.RSIPeriod, r.Params.RSIBuy, r.Params.RSISell,
@@ -1210,15 +1217,18 @@ func (m *Model) handleTelegramCmd(cmd telegram.Command) {
                                 )
                         }
                         if err := optimizer.SaveResults(results); err != nil {
-                                lines += fmt.Sprintf("⚠️ Gagal simpan ke file: %v", err)
+                                out += fmt.Sprintf("⚠️ Gagal simpan: %v", err)
                         } else {
-                                lines += "💾 Hasil disimpan ke <code>optimized_params.json</code>"
+                                out += "💾 Params disimpan ke <code>optimized_params.json</code>\n" +
+                                        "<i>Restart app agar params baru aktif di semua bot.</i>"
                         }
-                        tg.Send(lines)
+                        tg.Send(out)
                 }()
 
         case telegram.CmdUnknown:
-                tg.Send("❓ Perintah tidak dikenal. Ketik /help untuk daftar perintah.")
+                // Show the main menu for unknown commands instead of a plain error
+                text := telegram.DashboardText(mode, mt5Stat, acc.Balance, acc.Equity, running, len(m.bots), session)
+                sendOrEdit(text, telegram.MainMenuKeyboard())
         }
 }
 
