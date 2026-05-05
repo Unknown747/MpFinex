@@ -984,53 +984,93 @@ func (m *Model) handleTelegramCmd(cmd telegram.Command) {
 
         case telegram.CmdStart:
                 arg := strings.TrimSpace(cmd.Arg)
-                found := false
-                for _, b := range m.bots {
-                        if strings.EqualFold(b.Name, arg) {
-                                found = true
-                                if b.IsRunning {
-                                        tg.Send(fmt.Sprintf("⚠️ Bot <b>%s</b> sudah berjalan.", b.Name))
-                                } else {
+                if arg == "" {
+                        // Tanpa argumen → start semua bot
+                        started := 0
+                        lines := "▶️ <b>Semua bot dimulai:</b>\n\n"
+                        for _, b := range m.bots {
+                                if !b.IsRunning {
                                         b.IsRunning = true
                                         if m.log != nil {
                                                 m.log.BotStart(b.ID, b.Name, b.Symbol, string(b.Strategy))
                                         }
-                                        tg.Send(fmt.Sprintf("▶️ Bot <b>%s</b> (%s) dimulai.", b.Name, b.Symbol))
+                                        started++
                                 }
-                                break
+                                icon := "🟢"
+                                if !b.IsRunning {
+                                        icon = "🔴"
+                                }
+                                lines += fmt.Sprintf("%s <b>%s</b> — %s (%s)\n", icon, b.Name, b.Symbol, b.Strategy)
                         }
-                }
-                if !found {
-                        if arg == "" {
-                                tg.Send("⚠️ Gunakan: /startbot &lt;nama bot&gt;")
+                        if started == 0 {
+                                tg.Send("⚠️ Semua bot sudah berjalan.")
                         } else {
-                                tg.Send(fmt.Sprintf("❓ Bot <b>%s</b> tidak ditemukan. Ketik /bots untuk daftar bot.", arg))
+                                tg.Send(lines)
+                        }
+                } else {
+                        // Dengan argumen → start satu bot by name
+                        found := false
+                        for _, b := range m.bots {
+                                if strings.Contains(strings.ToLower(b.Name), strings.ToLower(arg)) {
+                                        found = true
+                                        if b.IsRunning {
+                                                tg.Send(fmt.Sprintf("⚠️ Bot <b>%s</b> sudah berjalan.", b.Name))
+                                        } else {
+                                                b.IsRunning = true
+                                                if m.log != nil {
+                                                        m.log.BotStart(b.ID, b.Name, b.Symbol, string(b.Strategy))
+                                                }
+                                                tg.Send(fmt.Sprintf("▶️ Bot <b>%s</b> (%s) dimulai.", b.Name, b.Symbol))
+                                        }
+                                        break
+                                }
+                        }
+                        if !found {
+                                tg.Send(fmt.Sprintf("❓ Bot <b>%s</b> tidak ditemukan. Ketik /bots untuk daftar.", arg))
                         }
                 }
 
         case telegram.CmdStop:
                 arg := strings.TrimSpace(cmd.Arg)
-                found := false
-                for _, b := range m.bots {
-                        if strings.EqualFold(b.Name, arg) {
-                                found = true
-                                if !b.IsRunning {
-                                        tg.Send(fmt.Sprintf("⚠️ Bot <b>%s</b> sudah berhenti.", b.Name))
-                                } else {
+                if arg == "" {
+                        // Tanpa argumen → stop semua bot
+                        stopped := 0
+                        lines := "⏹ <b>Semua bot dihentikan:</b>\n\n"
+                        for _, b := range m.bots {
+                                if b.IsRunning {
                                         b.IsRunning = false
                                         if m.log != nil {
                                                 m.log.BotStop(b.ID, b.Name, b.TotalPnL, b.WinCount, b.LossCount)
                                         }
-                                        tg.Send(fmt.Sprintf("⏹ Bot <b>%s</b> (%s) dihentikan.", b.Name, b.Symbol))
+                                        stopped++
                                 }
-                                break
+                                lines += fmt.Sprintf("⚫ <b>%s</b> — %s\n", b.Name, b.Symbol)
                         }
-                }
-                if !found {
-                        if arg == "" {
-                                tg.Send("⚠️ Gunakan: /stopbot &lt;nama bot&gt;")
+                        if stopped == 0 {
+                                tg.Send("⚠️ Semua bot sudah berhenti.")
                         } else {
-                                tg.Send(fmt.Sprintf("❓ Bot <b>%s</b> tidak ditemukan. Ketik /bots untuk daftar bot.", arg))
+                                tg.Send(lines)
+                        }
+                } else {
+                        // Dengan argumen → stop satu bot by name
+                        found := false
+                        for _, b := range m.bots {
+                                if strings.Contains(strings.ToLower(b.Name), strings.ToLower(arg)) {
+                                        found = true
+                                        if !b.IsRunning {
+                                                tg.Send(fmt.Sprintf("⚠️ Bot <b>%s</b> sudah berhenti.", b.Name))
+                                        } else {
+                                                b.IsRunning = false
+                                                if m.log != nil {
+                                                        m.log.BotStop(b.ID, b.Name, b.TotalPnL, b.WinCount, b.LossCount)
+                                                }
+                                                tg.Send(fmt.Sprintf("⏹ Bot <b>%s</b> (%s) dihentikan.", b.Name, b.Symbol))
+                                        }
+                                        break
+                                }
+                        }
+                        if !found {
+                                tg.Send(fmt.Sprintf("❓ Bot <b>%s</b> tidak ditemukan. Ketik /bots untuk daftar.", arg))
                         }
                 }
 

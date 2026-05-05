@@ -152,8 +152,10 @@ func HelpText() string {
 <b>Perintah yang tersedia:</b>
 /status — Status koneksi MT5 &amp; ringkasan akun
 /bots — Daftar semua bot dan statusnya
-/startbot &lt;nama&gt; — Mulai bot berdasarkan nama
-/stopbot &lt;nama&gt; — Hentikan bot berdasarkan nama
+/startbot — Mulai <b>semua</b> bot sekaligus (auto trade)
+/startbot &lt;nama&gt; — Mulai satu bot berdasarkan nama
+/stopbot — Hentikan <b>semua</b> bot sekaligus
+/stopbot &lt;nama&gt; — Hentikan satu bot berdasarkan nama
 /trades — Posisi yang sedang terbuka
 /balance — Saldo akun saat ini
 /optimize &lt;SYMBOL&gt; — Jalankan optimizer GA untuk simbol (contoh: /optimize EURUSD)
