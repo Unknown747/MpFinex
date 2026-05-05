@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/finex/finex-cli/internal/indicator"
 	"github.com/finex/finex-cli/internal/market"
 )
 
@@ -119,35 +120,39 @@ func (b *Bot) Tick(mkt *market.Market, accountBalance float64) {
 	}
 
 	if b.OpenTrade != nil {
-		b.checkCloseCondition(price.Price)
+		b.checkCloseCondition(price.Price, mkt.GetCloses(b.Symbol))
 		return
 	}
 
-	if b.shouldOpenTrade() {
-		b.openTrade(price.Price, accountBalance)
+	closes := mkt.GetCloses(b.Symbol)
+	sig := b.getSignal(closes)
+	if sig != indicator.None {
+		b.openTrade(price.Price, accountBalance, sig)
 	}
 }
 
-func (b *Bot) shouldOpenTrade() bool {
+// getSignal evaluates the indicator for this bot's strategy and returns a
+// directional signal. None means "no trade yet".
+func (b *Bot) getSignal(closes []float64) indicator.Signal {
 	switch b.Strategy {
 	case Scalping:
-		return b.rng.Intn(20) == 0
+		return indicator.ScalpingSignal(closes)
 	case SwingTrading:
-		return b.rng.Intn(40) == 0
+		return indicator.SwingSignal(closes)
 	case TrendFollowing:
-		return b.rng.Intn(30) == 0
+		return indicator.TrendSignal(closes)
 	case MeanReversion:
-		return b.rng.Intn(25) == 0
+		return indicator.MeanReversionSignal(closes)
 	}
-	return false
+	return indicator.None
 }
 
-func (b *Bot) openTrade(price, balance float64) {
+func (b *Bot) openTrade(price, balance float64, sig indicator.Signal) {
 	risk := balance * (b.RiskPct / 100)
 	qty := risk / price
 
 	side := Buy
-	if b.rng.Intn(2) == 0 {
+	if sig == indicator.Short {
 		side = Sell
 	}
 
@@ -169,7 +174,9 @@ func (b *Bot) openTrade(price, balance float64) {
 	}
 }
 
-func (b *Bot) checkCloseCondition(currentPrice float64) {
+// checkCloseCondition exits the trade on TP/SL hit, or when the indicator
+// signal reverses (exit on signal flip for tighter discipline).
+func (b *Bot) checkCloseCondition(currentPrice float64, closes []float64) {
 	if b.OpenTrade == nil {
 		return
 	}
@@ -185,23 +192,20 @@ func (b *Bot) checkCloseCondition(currentPrice float64) {
 		pnlPct = (entry - currentPrice) / entry
 	}
 
-	shouldClose := pnlPct >= tp || pnlPct <= -sl
-
-	if !shouldClose {
-		var randomClose int
-		switch b.Strategy {
-		case Scalping:
-			randomClose = 15
-		case SwingTrading:
-			randomClose = 60
-		default:
-			randomClose = 35
-		}
-		shouldClose = b.rng.Intn(randomClose) == 0
+	// Primary exit: TP or SL hit
+	if pnlPct >= tp || pnlPct <= -sl {
+		b.closeTrade(currentPrice, pnlPct)
+		return
 	}
 
-	if shouldClose {
-		b.closeTrade(currentPrice, pnlPct)
+	// Secondary exit: indicator signal reverses direction → cut early
+	sig := b.getSignal(closes)
+	if sig != indicator.None {
+		isLong := b.OpenTrade.Side == Buy
+		reversal := (isLong && sig == indicator.Short) || (!isLong && sig == indicator.Long)
+		if reversal {
+			b.closeTrade(currentPrice, pnlPct)
+		}
 	}
 }
 

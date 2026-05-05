@@ -37,9 +37,10 @@ func (p *Price) Direction() string {
 }
 
 type Market struct {
-	prices  map[string]*Price
-	history map[string][]Candle
-	rng     *rand.Rand
+	prices    map[string]*Price
+	history   map[string][]Candle
+	tickCount map[string]int // ticks since last candle close
+	rng       *rand.Rand
 }
 
 var defaultPrices = map[string]float64{
@@ -64,11 +65,16 @@ var volatility = map[string]float64{
 	"AVAX/USDT": 0.0032,
 }
 
+// candleIntervalTicks is how many 1-second ticks make up one candle.
+// 10 ticks = 10-second candles, giving indicators enough data quickly.
+const candleIntervalTicks = 10
+
 func NewMarket() *Market {
 	m := &Market{
-		prices:  make(map[string]*Price),
-		history: make(map[string][]Candle),
-		rng:     rand.New(rand.NewSource(time.Now().UnixNano())),
+		prices:    make(map[string]*Price),
+		history:   make(map[string][]Candle),
+		tickCount: make(map[string]int),
+		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 	for sym, price := range defaultPrices {
 		m.prices[sym] = &Price{
@@ -85,10 +91,10 @@ func NewMarket() *Market {
 }
 
 func (m *Market) generateHistory(symbol string, basePrice float64) {
-	candles := make([]Candle, 50)
+	candles := make([]Candle, 100)
 	p := basePrice * 0.95
 	now := time.Now()
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 100; i++ {
 		vol := volatility[symbol]
 		change := (m.rng.Float64()*2 - 1) * vol * p
 		o := p
@@ -96,7 +102,7 @@ func (m *Market) generateHistory(symbol string, basePrice float64) {
 		h := math.Max(o, c) * (1 + m.rng.Float64()*vol*0.5)
 		l := math.Min(o, c) * (1 - m.rng.Float64()*vol*0.5)
 		candles[i] = Candle{
-			Timestamp: now.Add(time.Duration(-50+i) * time.Hour),
+			Timestamp: now.Add(time.Duration(-100+i) * time.Minute * candleIntervalTicks),
 			Open:      o,
 			High:      h,
 			Low:       l,
@@ -128,15 +134,35 @@ func (m *Market) Tick() {
 		}
 		p.LastUpdated = time.Now()
 
+		// Update current (forming) candle
 		candles := m.history[sym]
-		last := candles[len(candles)-1]
-		if newPrice > last.High {
-			candles[len(candles)-1].High = newPrice
+		idx := len(candles) - 1
+		if newPrice > candles[idx].High {
+			candles[idx].High = newPrice
 		}
-		if newPrice < last.Low {
-			candles[len(candles)-1].Low = newPrice
+		if newPrice < candles[idx].Low {
+			candles[idx].Low = newPrice
 		}
-		candles[len(candles)-1].Close = newPrice
+		candles[idx].Close = newPrice
+
+		// Close candle and open a new one every candleIntervalTicks
+		m.tickCount[sym]++
+		if m.tickCount[sym] >= candleIntervalTicks {
+			m.tickCount[sym] = 0
+			newCandle := Candle{
+				Timestamp: time.Now(),
+				Open:      newPrice,
+				High:      newPrice,
+				Low:       newPrice,
+				Close:     newPrice,
+				Volume:    float64(m.rng.Intn(1000) + 100),
+			}
+			m.history[sym] = append(m.history[sym], newCandle)
+			// Keep at most 200 candles to bound memory
+			if len(m.history[sym]) > 200 {
+				m.history[sym] = m.history[sym][len(m.history[sym])-200:]
+			}
+		}
 	}
 }
 
@@ -160,4 +186,15 @@ func (m *Market) GetAllPrices() []*Price {
 
 func (m *Market) GetHistory(symbol string) []Candle {
 	return m.history[symbol]
+}
+
+// GetCloses returns only the Close prices from the candle history,
+// ready to feed into indicator calculations.
+func (m *Market) GetCloses(symbol string) []float64 {
+	candles := m.history[symbol]
+	out := make([]float64, len(candles))
+	for i, c := range candles {
+		out[i] = c.Close
+	}
+	return out
 }
