@@ -4,7 +4,7 @@ Terminal UI trading bot untuk MetaTrader 5, dirancang khusus untuk broker **Fine
 
 ![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go)
 ![MT5](https://img.shields.io/badge/MT5-Demo%2FLive-orange)
-![Tests](https://img.shields.io/badge/tests-57%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-89%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 ---
@@ -19,10 +19,13 @@ Terminal UI trading bot untuk MetaTrader 5, dirancang khusus untuk broker **Fine
 | D | Multi-bot management | Buat, edit, start/stop, hapus bot lewat TUI; config disimpan di `bots.json` |
 | E | Koneksi MT5 | TLS + SRP-6a authentication ke server MetaQuotes |
 | F | Structured logging | Semua trade, event bot, dan error MT5 dicatat ke `finex-bot.log` |
-| G | Risk management | Daily loss limit, max drawdown, dynamic lot sizing, cooldown |
+| G | Risk management | Daily loss limit (5%), max drawdown (10%), dynamic lot sizing, cooldown |
 | H | Correlation-aware sizing | Posisi berkorelasi tinggi otomatis dikurangi risikonya 30% |
 | I | Market Regime Detection | ADX + ATR + BB mendeteksi Trending / Ranging / Volatile |
 | J | Performance Dashboard | Win rate, Profit Factor, Sharpe Ratio, Max Drawdown (Tab 6) |
+| K | Trading Session Filter | Hanya buka posisi saat sesi London (07–16 UTC) atau New York (13–22 UTC) |
+| L | GA Optimizer | Genetic Algorithm otomatis cari parameter RSI/EMA/BB terbaik per simbol |
+| M | Telegram Bot Profesional | Inline keyboard, edit-in-place, toggle bot per-tombol, symbol picker |
 
 ---
 
@@ -191,7 +194,6 @@ Setelah menjalankan `./finex-bot`, kamu akan melihat antarmuka berikut:
 
 ### [4] Trades
 - Riwayat semua trade yang ditutup
-- Filter per bot / simbol (coming soon)
 
 ### [5] Settings
 - Toggle Demo / Real (tombol `r`)
@@ -210,12 +212,12 @@ Setelah menjalankan `./finex-bot`, kamu akan melihat antarmuka berikut:
 
 ## Strategi Trading
 
-| Strategi | Indikator | Entry BUY | Entry SELL | TP / SL |
-|---|---|---|---|---|
-| **Scalping** | RSI(7) | RSI < 38 | RSI > 62 | 1.5% / 0.8% |
-| **Swing** | BB(20, 2σ) | Price ≤ lower band | Price ≥ upper band | 3.0% / 1.5% |
-| **Trend Following** | EMA(9) × EMA(21) | Golden cross | Death cross | 3.0% / 1.5% |
-| **Mean Reversion** | RSI(14) + BB(20, 1.5σ) | RSI < 35 atau price ≤ lower | RSI > 65 atau price ≥ upper | 2.0% / 1.0% |
+| Strategi | Indikator | Entry BUY | Entry SELL |
+|---|---|---|---|
+| **Scalping** | RSI(7) | RSI < 38 | RSI > 62 |
+| **Swing Trading** | BB(20, 2σ) | Price ≤ lower band | Price ≥ upper band |
+| **Trend Following** | EMA(9) × EMA(21) | Golden cross | Death cross |
+| **Mean Reversion** | RSI(14) + BB(20, 1.5σ) | RSI < 35 atau price ≤ lower | RSI > 65 atau price ≥ upper |
 
 Semua strategi menggunakan konfirmasi **Smart Money Concepts (SMC)**:
 - **Order Block** — candle bullish diikuti bearish (demand zone untuk BUY)
@@ -231,6 +233,12 @@ lot = (equity × risk%) / (SL_pips × pip_value)
 ```
 Dibulatkan ke kelipatan lot step (0.01), minimum `MinLot`.
 
+### RiskLimits (Per Bot)
+| Parameter | Nilai Default | Keterangan |
+|---|---|---|
+| Max Daily Loss | 5% equity | Bot berhenti jika rugi harian > 5% |
+| Max Drawdown | 10% dari peak | Bot berhenti jika drawdown > 10% dari equity tertinggi |
+
 ### Dynamic Risk Profile (Rolling 20 Trade)
 | Win Rate | Risk per Trade |
 |---|---|
@@ -240,6 +248,7 @@ Dibulatkan ke kelipatan lot step (0.01), minimum `MinLot`.
 
 - **3 consecutive losses** → risk dipotong 50% untuk trade berikutnya
 - **5 consecutive losses** → cooldown 1 jam (trading halt)
+- **Win trade** → reset consecutive loss ke 0
 
 ### Correlation-Aware Sizing
 | Kondisi | Tindakan |
@@ -254,6 +263,123 @@ Dibulatkan ke kelipatan lot step (0.01), minimum `MinLot`.
 | **TRENDING** | ADX > 25 + slope EMA ≠ 0 | Trend + Swing strategies diprioritaskan |
 | **RANGING** | ADX < 20 + BB width < 1% | Mean Reversion + Scalping diprioritaskan |
 | **VOLATILE** | ATR(14) > 1.5× mean ATR(50) | Risk semua strategi dikurangi 50% |
+
+### Trading Session Filter
+Bot hanya membuka posisi baru dalam sesi aktif:
+- **London**: 07:00–16:00 UTC
+- **New York**: 13:00–22:00 UTC
+- **Asia** (22:00–07:00 UTC): tidak ada entry baru
+
+---
+
+## Telegram Bot
+
+Finex CLI bisa dikontrol dari mana saja via Telegram dengan tampilan profesional — inline keyboard, edit pesan in-place (seperti bot Trojan), dan toggle per-bot langsung dari tombol.
+
+### Setup
+
+1. Buka Telegram → cari **@BotFather** → `/newbot` → salin token ke `TELEGRAM_BOT_TOKEN`
+2. Buka **@userinfobot** → salin "Id" kamu ke `TELEGRAM_CHAT_ID`
+3. Isi `.env` lalu restart app — dashboard lengkap dengan tombol akan muncul otomatis
+
+### Tampilan Dashboard
+
+```
+🤖 FINEX TRADING BOT
+━━━━━━━━━━━━━━━━━━━━━━
+📡 MT5: ❌ Offline  |  🔧 Mode: DEMO
+🌍 Sesi: London
+━━━━━━━━━━━━━━━━━━━━━━
+💰 Balance   $ 10000.00
+💎 Equity    $ 10000.00
+━━━━━━━━━━━━━━━━━━━━━━
+🟢 Bot Aktif  2 / 3
+━━━━━━━━━━━━━━━━━━━━━━
+Pilih aksi:
+
+[▶️ Start All]  [⏹ Stop All]
+[📊 Status]  [💰 Balance]  [📈 Trades]
+[🤖 Kelola Bot]  [⚙️ Optimize]
+[🔄 Refresh]
+```
+
+### Perintah Teks (Alternatif Tombol)
+
+| Perintah | Fungsi |
+|---|---|
+| `/help` atau `/menu` | Tampilkan dashboard utama dengan tombol |
+| `/status` | Status MT5, mode, sesi, saldo, drawdown |
+| `/bots` | Daftar bot + tombol toggle per bot |
+| `/startbot` | Mulai semua bot |
+| `/stopbot` | Hentikan semua bot |
+| `/trades` | Posisi terbuka + unrealized P&L |
+| `/balance` | Saldo & equity akun |
+| `/optimize` | Buka symbol picker untuk GA optimizer |
+
+### Kelola Bot via Tombol
+
+Tap **🤖 Kelola Bot** → muncul daftar bot dengan tombol toggle per bot:
+
+```
+🤖 KELOLA BOT
+━━━━━━━━━━━━━━━━━━━━━━
+1. 🟢 EUR Scalper
+   📌 EURUSD  ·  Scalping
+   📊 Status  : Aktif
+   🟢 P&L    : $+45.20  ·  W:12 / L:5
+
+[🟢 EUR Scalper · ⏹ Stop]
+[🔴 GBP Trend   · ▶️ Start]
+[▶️ Start All]  [⏹ Stop All]
+[🔄 Refresh]  [🏠 Menu]
+```
+
+Tap tombol bot → status toggle langsung, pesan diperbarui in-place.
+
+### Optimizer via Tombol
+
+Tap **⚙️ Optimize** → pilih simbol dari keyboard:
+
+```
+[EURUSD]  [GBPUSD]  [USDJPY]
+[AUDUSD]  [USDCAD]  [USDCHF]
+[EURGBP]  [EURJPY]
+[🏠 Menu]
+```
+
+Tap simbol → GA optimizer berjalan 4 strategi × 10 generasi × 20 kromosom → hasil dikirim otomatis ke chat.
+
+### Notifikasi Otomatis
+
+Bot mengirim alert tanpa polling manual:
+
+| Event | Trigger |
+|---|---|
+| ⚠️ **Drawdown Alert** | Equity turun ≥5% dari peak (max 1x/jam) |
+| 📊 **Laporan Harian** | Setiap tengah malam — total P&L, win rate, trade count |
+
+> **Keamanan:** Semua perintah dan tombol hanya merespons dari `TELEGRAM_CHAT_ID` yang terdaftar. Permintaan dari chat lain langsung ditolak.
+
+---
+
+## GA Optimizer
+
+Jalankan Genetic Algorithm untuk mencari parameter indikator terbaik per simbol:
+
+```bash
+# Via Telegram: tap ⚙️ Optimize → pilih simbol
+# Via TUI: belum tersedia (roadmap)
+```
+
+Optimizer menjalankan **4 strategi sekaligus** untuk setiap simbol:
+- Scalping, Trend Following, Swing Trading, Mean Reversion
+
+Parameter yang dioptimalkan:
+- RSI period + threshold buy/sell
+- EMA fast + slow period
+- Bollinger Bands period + multiplier
+
+Hasil disimpan ke `optimized_params.json` dan diterapkan otomatis ke semua bot saat app restart.
 
 ---
 
@@ -272,37 +398,44 @@ finex-cli/
     ├── bot/
     │   ├── bot.go                   # Logika bot, lifecycle trade, default bots
     │   ├── risk.go                  # RiskLimits, RiskProfile, CalculateLotSize
-    │   └── risk_test.go
+    │   ├── risk_test.go
+    │   └── trade_manager.go         # Manajemen posisi terbuka
     ├── config/
     │   └── config.go                # Simpan/load bots.json
     ├── indicator/
     │   ├── indicator.go             # RSI, EMA, SMA, Bollinger Bands, ATR, ADX, cache
     │   └── indicator_test.go
     ├── journal/
-    │   └── journal.go               # Trade journal (JSONL)
+    │   └── journal.go               # Trade journal (JSONL) + equity curve HTML
     ├── logger/
     │   └── logger.go                # Structured file logger
     ├── market/
     │   ├── market.go                # Simulasi forex market + candle history
-    │   ├── market_test.go
-    │   ├── regime.go                # Market regime detection
+    │   ├── regime.go                # Market regime detection (ADX + ATR + BB)
     │   └── regime_test.go
     ├── mt5/
     │   ├── client.go                # TLS connection + SRP-6a auth + heartbeat
     │   ├── account.go               # Binary account info parser
+    │   ├── heartbeat.go             # Keepalive loop
+    │   ├── order.go                 # Order submission (placeholder)
+    │   ├── pricefeed.go             # Live price streaming
     │   ├── proto.go                 # MT5 binary packet encoding/decoding
     │   └── srp6a.go                 # SRP-6a (RFC 5054, Group 14 / SHA-256)
     ├── optimizer/
-    │   └── optimizer.go             # Grid-search parameter optimizer
+    │   ├── genetic.go               # Genetic Algorithm (populasi, seleksi, mutasi)
+    │   └── apply.go                 # ApplyToBots: baca optimized_params.json → set ke bot
     ├── risk/
     │   ├── correlation.go           # Correlation matrix + exposure cap
     │   └── correlation_test.go
     ├── strategy/
     │   ├── smart_money.go           # Order Block + FVG detection
     │   └── smart_money_test.go
+    ├── telegram/
+    │   └── bot.go                   # Professional Telegram bot: inline keyboard, edit-in-place
     └── utils/
         ├── news.go                  # High-impact news blackout (FOMC, NFP, CPI)
-        └── news_test.go
+        ├── news_test.go
+        └── session.go               # Trading session filter (London / New York / Asia)
 ```
 
 ---
@@ -320,7 +453,7 @@ go test ./internal/risk/... -v
 go test ./internal/... -cover
 ```
 
-Output yang diharapkan: **57 tests, semua PASS**.
+Output yang diharapkan: **89 tests, semua PASS**.
 
 ---
 
@@ -333,40 +466,8 @@ Output yang diharapkan: **57 tests, semua PASS**.
 | TUI berantakan / tidak aligned | Pastikan terminal width minimal 80 kolom |
 | Bot tidak bisa start | Cek log di `finex-bot.log` untuk detail error |
 | `bots.json` tidak tersimpan | Pastikan direktori project memiliki permission write |
-
----
-
-## Telegram Bot
-
-Finex CLI bisa dikontrol dari mana saja via Telegram. Aktifkan dengan mengisi `TELEGRAM_BOT_TOKEN` dan `TELEGRAM_CHAT_ID` di file `.env`.
-
-### Setup
-
-1. Buka Telegram → cari **@BotFather** → `/newbot` → salin token ke `TELEGRAM_BOT_TOKEN`
-2. Buka **@userinfobot** → salin "Id" kamu ke `TELEGRAM_CHAT_ID`
-3. Isi `.env` lalu restart app — kamu akan menerima pesan **"🟢 Finex CLI aktif"**
-
-### Perintah
-
-| Perintah | Fungsi |
-|---|---|
-| `/help` | Tampilkan semua perintah |
-| `/status` | Status MT5, mode, bot aktif, saldo & equity |
-| `/bots` | Daftar semua bot beserta P&L dan status running |
-| `/startbot <nama>` | Mulai bot berdasarkan nama (contoh: `/startbot EUR Scalper`) |
-| `/stopbot <nama>` | Hentikan bot berdasarkan nama |
-| `/trades` | Posisi terbuka saat ini + unrealized P&L |
-| `/balance` | Saldo & equity akun saat ini |
-| `/optimize <SYMBOL>` | Jalankan Genetic Algorithm optimizer dari HP — hasil 4 strategi dikirim otomatis ke chat |
-
-### Notifikasi Otomatis
-
-Bot mengirim pesan otomatis tanpa perlu polling manual:
-
-- 🟢/🔴 **Trade buka** — pair, side, entry price, ukuran lot
-- ✅/❌ **Trade tutup** — entry → exit price, P&L pip, P&L USD, alasan, durasi
-
-> **Keamanan:** Perintah hanya diterima dari `TELEGRAM_CHAT_ID` yang terdaftar. Pesan dari chat lain langsung ditolak.
+| Telegram tidak merespons | Pastikan `TELEGRAM_BOT_TOKEN` dan `TELEGRAM_CHAT_ID` sudah diisi benar di `.env` |
+| Optimizer tidak tersimpan | Pastikan direktori punya akses write; cek `optimized_params.json` |
 
 ---
 

@@ -433,7 +433,14 @@ func initialModel(dryRun bool) Model {
         } else if tg != nil {
                 tg.Start()
                 m.tgBot = tg
-                tg.Send("🟢 <b>Finex CLI aktif.</b> Ketik /help untuk daftar perintah.")
+                // Send the full dashboard menu on startup so the user has buttons right away.
+                acc := m.currentAccount()
+                mode := m.tgMode()
+                mt5Stat := m.mt5Client.Status.String()
+                session := utils.ActiveSessionName()
+                running := m.tgRunningCount()
+                dashText := telegram.DashboardText(mode, mt5Stat, acc.Balance, acc.Equity, running, len(m.bots), session)
+                tg.SendMenu(dashText, telegram.MainMenuKeyboard())
         }
 
         m.initBotForm()
