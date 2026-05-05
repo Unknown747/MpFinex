@@ -15,6 +15,55 @@ Terminal UI (TUI) trading bot for MetaTrader 5, designed for **FinexBisnisSolusi
 - **MT5 connection** — TLS + SRP-6a authentication to MetaQuotes trade server binary protocol
 - **Structured logging** — all trades, bot events, and MT5 errors written to `finex-bot.log`
 
+### H. Smart Position Sizing — Correlation-Aware (NEW)
+
+File: `internal/risk/correlation.go`
+
+Static 15-minute correlation matrix for all 8 pairs:
+
+| Pair 1 | Pair 2 | Correlation |
+|---|---|---|
+| EURUSD | GBPUSD | +0.85 (high) |
+| EURUSD | USDCHF | −0.92 (inverse) |
+| USDJPY | EURJPY | +0.78 |
+| EURUSD | EURJPY | +0.72 |
+| GBPUSD | EURGBP | −0.75 |
+| USDJPY | USDCHF | +0.70 |
+
+Rules enforced before each trade entry:
+
+1. **Correlation ≥ 0.7 → reduce total risk 30%** when adding a same-direction position in a highly correlated pair.
+2. **Block conflicting positions**: opening BUY EURUSD while GBPUSD is also BUY when corr = +0.85 is allowed (same direction, reduced risk), but opening SELL EURUSD alongside BUY GBPUSD is blocked outright.
+3. **Total correlated exposure ≤ 5% of equity** — if the combined risk % of highly-correlated open positions exceeds this cap, no new position is opened.
+
+### I. Automatic Market Regime Detection (NEW)
+
+File: `internal/market/regime.go`
+
+Regimes are detected per-symbol using ADX, EMA slope, Bollinger Band width, and ATR. Cache TTL is 1 hour; forced refresh runs hourly.
+
+| Regime | Detection Criteria | Strategy Weights |
+|---|---|---|
+| **TRENDING** | ADX > 25 + EMA slope ≠ 0 | Trend Following + Swing = 70% |
+| **RANGING** | ADX < 20 + BB width < 1% | Mean Reversion + Scalping = 70% |
+| **VOLATILE** | ATR(14) > 1.5× mean ATR(50) | All strategies at 50% (risk halved) |
+
+ADX indicator added to `internal/indicator/indicator.go` using Wilder's smoothing.
+
+### J. Performance Metrics Dashboard — Tab 6 (NEW)
+
+New tab accessible via `6` or `Tab` key in the TUI.
+
+Real-time metrics updated every 30 seconds:
+
+- **Win Rate** — aggregate across all bots
+- **Profit Factor** — sum of winning P&L / |sum of losing P&L|
+- **Sharpe Ratio** — simplified per-trade Sharpe (mean / std × √n)
+- **Max Drawdown** — peak-to-trough percentage from cumulative P&L curve
+- **Top Pairs** — sorted by total realised P&L
+- **Best Strategy** — sorted by profit factor per strategy
+- **Risk Meter** — current drawdown vs maximum allowed; turns red if drawdown > 70% of limit
+
 ---
 
 ## Quick Start
@@ -52,7 +101,7 @@ go build -o finex-bot .
 
 | Key | Action |
 |---|---|
-| `Tab` / `1`–`5` | Switch tabs |
+| `Tab` / `1`–`6` | Switch tabs |
 | `s` | Start / stop selected bot |
 | `n` | New bot |
 | `e` | Edit selected bot |
@@ -66,22 +115,25 @@ go build -o finex-bot .
 
 ```
 finex-cli/
-├── main.go                    # TUI entry point (Bubble Tea model + views)
+├── main.go                        # TUI entry point (Bubble Tea model + views)
 ├── internal/
-│   ├── account/account.go     # Account types (Demo / Real)
-│   ├── bot/bot.go             # Bot logic, trade lifecycle, default bots
-│   ├── config/config.go       # Persist bot config to bots.json
-│   ├── indicator/indicator.go # RSI, EMA, SMA, Bollinger Bands, signals
-│   ├── logger/logger.go       # Structured file logger (finex-bot.log)
-│   ├── market/market.go       # Simulated forex market + candle history
+│   ├── account/account.go         # Account types (Demo / Real)
+│   ├── bot/bot.go                 # Bot logic, trade lifecycle, default bots
+│   ├── bot/risk.go                # RiskLimits, RiskProfile, dynamic lot sizing
+│   ├── config/config.go           # Persist bot config to bots.json
+│   ├── indicator/indicator.go     # RSI, EMA, SMA, Bollinger Bands, ATR, ADX, signals
+│   ├── logger/logger.go           # Structured file logger (finex-bot.log)
+│   ├── market/market.go           # Simulated forex market + candle history
+│   ├── market/regime.go           # [NEW] Market regime detection (ADX/ATR/BB)
+│   ├── risk/correlation.go        # [NEW] Correlation-aware position sizing
 │   └── mt5/
-│       ├── client.go          # MT5 TLS connection + SRP-6a auth
-│       ├── account.go         # Binary account info parser
-│       ├── proto.go           # MT5 binary packet encoding/decoding
-│       └── srp6a.go           # SRP-6a (RFC 5054 Group 14 / SHA-256)
+│       ├── client.go              # MT5 TLS connection + SRP-6a auth
+│       ├── account.go             # Binary account info parser
+│       ├── proto.go               # MT5 binary packet encoding/decoding
+│       └── srp6a.go               # SRP-6a (RFC 5054 Group 14 / SHA-256)
 ├── scripts/
-│   └── post-merge.sh          # Post-merge build hook
-├── .env.example               # Environment variable template
+│   └── post-merge.sh              # Post-merge build hook
+├── .env.example                   # Environment variable template
 └── .gitignore
 ```
 
@@ -98,6 +150,19 @@ finex-cli/
 
 ---
 
+## Risk Management
+
+| Feature | Details |
+|---|---|
+| Daily loss limit | Bot stops when daily loss % exceeds threshold |
+| Max drawdown | Bot stops when trailing drawdown exceeds threshold |
+| Dynamic lot sizing | Wilder ATR-based SL/TP + Kelly-inspired lot calc |
+| Correlation filter | Blocks conflicting positions; reduces risk 30% on same-dir correlated pairs |
+| Regime detection | Halves risk in volatile markets; weights strategies by regime |
+| Consecutive loss cooldown | 1-hour trading halt after 5 consecutive losses |
+
+---
+
 ## Real Trading Setup
 
 To switch from demo to live trading, update these environment variables:
@@ -109,9 +174,7 @@ FINEX_SERVER=FinexBisnisSolusi-Live
 FINEX_HOST=<live_server_host>:443   # ask Finex support
 ```
 
-> **Note:** Real order placement is not yet implemented. The bot currently authenticates to MT5 and runs strategies in simulation mode. Live order execution (`PlaceOrder`, price feed subscription) is planned for a future release.
-
-> **Network:** The MT5 trade server may block connections from cloud/VPS IP addresses. For live trading, run the bot from your own machine or a dedicated VPS with a whitelisted static IP.
+> **Note:** Real order placement is not yet implemented. The bot currently authenticates to MT5 and runs strategies in simulation mode. Live order execution is planned for a future release.
 
 ---
 

@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	defaultMinLot = 0.01
+	defaultMinLot  = 0.01
 	defaultLotStep = 0.01
 	// News blackout: 13:30 – 14:30 UTC (high-impact economic news window).
 	newsBlackoutStartMin = 13*60 + 30
@@ -16,10 +16,10 @@ const (
 
 // ValidateOrder memeriksa apakah order valid sebelum dikirim ke MT5.
 //
-//   symbol          – pasangan mata uang (e.g. "EURUSD")
-//   volume          – ukuran lot yang akan dibuka
-//   marginRequired  – estimasi margin yang dibutuhkan (dalam currency akun)
-//   acc             – data akun live dari MT5
+//	symbol          – pasangan mata uang (e.g. "EURUSD")
+//	volume          – ukuran lot yang akan dibuka
+//	marginRequired  – estimasi margin yang dibutuhkan (dalam currency akun)
+//	acc             – data akun live dari MT5
 //
 // Return error berisi alasan detail jika order ditolak, nil jika lolos semua cek.
 func ValidateOrder(symbol string, volume float64, marginRequired float64, acc *AccountInfo) error {

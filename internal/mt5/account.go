@@ -23,15 +23,16 @@ type AccountInfo struct {
 // parseAccountBody attempts to decode the account info binary payload.
 //
 // Expected layout (little-endian):
-//   [int64   login      ]
-//   [float64 balance    ]
-//   [float64 equity     ]
-//   [float64 margin     ]
-//   [float64 free_margin]
-//   [float64 profit     ]
-//   [uint32  leverage   ]
-//   [cstr    currency   ]
-//   [cstr    name       ]
+//
+//	[int64   login      ]
+//	[float64 balance    ]
+//	[float64 equity     ]
+//	[float64 margin     ]
+//	[float64 free_margin]
+//	[float64 profit     ]
+//	[uint32  leverage   ]
+//	[cstr    currency   ]
+//	[cstr    name       ]
 //
 // Returns nil if body is too short or values look corrupt, so the caller can
 // gracefully degrade rather than show garbage data.

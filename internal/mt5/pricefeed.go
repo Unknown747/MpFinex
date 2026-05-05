@@ -23,7 +23,7 @@ type TickPrice struct {
 	Symbol string
 	Bid    float64
 	Ask    float64
-	Mid    float64   // (Bid+Ask)/2 — digunakan oleh market simulator
+	Mid    float64 // (Bid+Ask)/2 — digunakan oleh market simulator
 	Time   time.Time
 }
 
