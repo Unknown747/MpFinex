@@ -333,6 +333,7 @@ type Model struct {
         // Periodic logging state
         lastDrawdownLog time.Time // last time DrawdownSnapshot was logged
         lastDailyLog    time.Time // last date DailyPL was logged (check day change)
+        lastDDAlert     time.Time // last time a Telegram drawdown alert was sent
         peakEquity      float64   // peak equity seen this session (for drawdown calc)
 
         // Paper trading
@@ -370,10 +371,13 @@ func initialModel(dryRun bool) Model {
         if len(bots) == 0 {
                 bots = botpkg.DefaultBots()
         }
-        // Wire dry-run flag to every bot
+        // Wire dry-run flag + RiskLimits (5% daily loss cap, 10% max drawdown) to every bot.
+        // Apply GA-optimized indicator params if optimized_params.json exists.
         for _, b := range bots {
                 b.DryRun = dryRun
+                b.Risk = botpkg.NewRiskLimits(5.0, 10.0, dm.Equity)
         }
+        optimizer.ApplyToBots(bots)
         mt5Client := mt5.NewClient(mt5.ConfigFromEnv())
 
         // Open activity log (ignore error — bot runs fine without it).
@@ -787,23 +791,65 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                 acc.Equity = acc.Balance + openPnL
 
                 // ── Periodic: log drawdown snapshot setiap 5 menit ───────────────────
-                if m.log != nil && time.Since(m.lastDrawdownLog) >= 5*time.Minute {
+                if time.Since(m.lastDrawdownLog) >= 5*time.Minute {
                         m.lastDrawdownLog = time.Now()
                         if acc.Equity > m.peakEquity {
                                 m.peakEquity = acc.Equity
                         }
                         if m.peakEquity > 0 {
                                 drawdownPct := (m.peakEquity - acc.Equity) / m.peakEquity * 100
-                                m.log.DrawdownSnapshot(acc.Equity, m.peakEquity, drawdownPct)
+                                if m.log != nil {
+                                        m.log.DrawdownSnapshot(acc.Equity, m.peakEquity, drawdownPct)
+                                }
+                                // Telegram drawdown alert — kirim saat DD ≥ 5%, max 1x per jam
+                                if drawdownPct >= 5.0 && m.tgBot != nil && time.Since(m.lastDDAlert) > time.Hour {
+                                        m.lastDDAlert = time.Now()
+                                        m.tgBot.Send(fmt.Sprintf(
+                                                "⚠️ <b>DRAWDOWN ALERT</b>\n\n"+
+                                                        "Equity: <b>$%.2f</b> (peak: $%.2f)\n"+
+                                                        "Drawdown: <b>%.1f%%</b>\n\n"+
+                                                        "Pertimbangkan /stopbot untuk melindungi modal.",
+                                                acc.Equity, m.peakEquity, drawdownPct,
+                                        ))
+                                }
                         }
                 }
 
                 // ── Periodic: log daily P&L saat pergantian hari ─────────────────────
                 now := time.Now()
-                if m.log != nil && (now.YearDay() != m.lastDailyLog.YearDay() || now.Year() != m.lastDailyLog.Year()) {
+                if now.YearDay() != m.lastDailyLog.YearDay() || now.Year() != m.lastDailyLog.Year() {
                         m.lastDailyLog = now
                         todayProfit, todayLoss, winRate := calcDailyStats(m.bots)
-                        m.log.DailyPL(todayProfit, todayLoss, winRate)
+                        if m.log != nil {
+                                m.log.DailyPL(todayProfit, todayLoss, winRate)
+                        }
+                        // Telegram daily summary otomatis saat pergantian hari
+                        if m.tgBot != nil {
+                                netPnL := todayProfit - todayLoss
+                                pnlEmoji := "🟢"
+                                if netPnL < 0 {
+                                        pnlEmoji = "🔴"
+                                }
+                                activeCount := 0
+                                for _, b := range m.bots {
+                                        if b.IsRunning {
+                                                activeCount++
+                                        }
+                                }
+                                m.tgBot.Send(fmt.Sprintf(
+                                        "📊 <b>Laporan Harian</b>\n\n"+
+                                                "Profit: $%.2f | Loss: $%.2f\n"+
+                                                "Net P&L: %s <b>$%.2f</b>\n"+
+                                                "Win Rate: %.1f%%\n"+
+                                                "Saldo: $%.2f | Equity: $%.2f\n"+
+                                                "Bot aktif: %d/%d",
+                                        todayProfit, todayLoss,
+                                        pnlEmoji, netPnL,
+                                        winRate,
+                                        acc.Balance, acc.Equity,
+                                        activeCount, len(m.bots),
+                                ))
+                        }
                 }
 
                 return m, tickCmd()
