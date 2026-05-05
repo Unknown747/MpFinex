@@ -42,6 +42,12 @@ equity_chart.html
 .DS_Store
 Thumbs.db
 
+# Environment / secrets — JANGAN DI-COMMIT!
+.env
+.env.local
+.env.*.local
+
 # Replit
 .cache/
 .local/
+.replit.nix

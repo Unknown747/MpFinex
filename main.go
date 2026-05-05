@@ -14,6 +14,8 @@ import (
         "math"
         "sort"
 
+        "github.com/joho/godotenv"
+
         "github.com/finex/finex-cli/internal/account"
         botpkg "github.com/finex/finex-cli/internal/bot"
         "github.com/finex/finex-cli/internal/config"
@@ -2751,6 +2753,9 @@ func runOptimizer(symbol string) {
 }
 
 func main() {
+        // Load .env file jika ada (best-effort; env vars yang sudah diset tidak di-overwrite)
+        _ = godotenv.Load()
+
         // Parse flags
         dryRun := false
         optimizeSymbol := ""

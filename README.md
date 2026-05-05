@@ -73,20 +73,16 @@ cp .env.example .env
 Lalu isi dengan data akun MT5 kamu:
 
 ```env
-# Nama broker / company
+# MT5 Connection
 FINEX_COMPANY=FinexBisnisSolusi
-
-# Nomor login MT5 (account number)
-FINEX_LOGIN=61369797
-
-# Nama server MT5
+FINEX_LOGIN=your_login_number
 FINEX_SERVER=FinexBisnisSolusi-Demo
-
-# Host dan port server MT5
 FINEX_HOST=prod-mt5-demo1.fnx.xmt.mx:443
+FINEX_PASSWORD=your_password
 
-# Password akun MT5 — JANGAN di-commit ke git!
-FINEX_PASSWORD=rahasia123
+# Telegram Bot (opsional)
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
 ```
 
 | Variable | Wajib | Keterangan |
@@ -96,8 +92,17 @@ FINEX_PASSWORD=rahasia123
 | `FINEX_SERVER` | Ya | Nama server MT5 (lihat di platform) |
 | `FINEX_HOST` | Ya | `hostname:port` server MT5 |
 | `FINEX_COMPANY` | Ya | Nama company broker (untuk verifikasi koneksi) |
+| `TELEGRAM_BOT_TOKEN` | Tidak | Token dari @BotFather — aktifkan remote control via Telegram |
+| `TELEGRAM_CHAT_ID` | Tidak | Chat ID kamu dari @userinfobot — untuk keamanan |
 
-> **Penting:** File `.env` sudah masuk `.gitignore`. Jangan pernah meng-commit file ini ke repositori publik.
+> **Penting:** File `.env` sudah masuk `.gitignore`. JANGAN pernah commit file ini ke repositori publik.
+
+### Prioritas Pembacaan Konfigurasi
+
+App membaca konfigurasi dengan urutan prioritas berikut:
+1. **Environment variable** yang sudah diset di sistem (tertinggi — override `.env`)
+2. **File `.env`** di direktori project
+3. **Default value** yang sudah hardcode di kode (terendah)
 
 ### Beralih ke Akun Live
 
@@ -328,6 +333,39 @@ Output yang diharapkan: **57 tests, semua PASS**.
 | TUI berantakan / tidak aligned | Pastikan terminal width minimal 80 kolom |
 | Bot tidak bisa start | Cek log di `finex-bot.log` untuk detail error |
 | `bots.json` tidak tersimpan | Pastikan direktori project memiliki permission write |
+
+---
+
+## Telegram Bot
+
+Finex CLI bisa dikontrol dari mana saja via Telegram. Aktifkan dengan mengisi `TELEGRAM_BOT_TOKEN` dan `TELEGRAM_CHAT_ID` di file `.env`.
+
+### Setup
+
+1. Buka Telegram → cari **@BotFather** → `/newbot` → salin token ke `TELEGRAM_BOT_TOKEN`
+2. Buka **@userinfobot** → salin "Id" kamu ke `TELEGRAM_CHAT_ID`
+3. Isi `.env` lalu restart app — kamu akan menerima pesan **"🟢 Finex CLI aktif"**
+
+### Perintah
+
+| Perintah | Fungsi |
+|---|---|
+| `/help` | Tampilkan semua perintah |
+| `/status` | Status MT5, mode, bot aktif, saldo & equity |
+| `/bots` | Daftar semua bot beserta P&L dan status running |
+| `/startbot <nama>` | Mulai bot berdasarkan nama (contoh: `/startbot EUR Scalper`) |
+| `/stopbot <nama>` | Hentikan bot berdasarkan nama |
+| `/trades` | Posisi terbuka saat ini + unrealized P&L |
+| `/balance` | Saldo & equity akun saat ini |
+
+### Notifikasi Otomatis
+
+Bot mengirim pesan otomatis tanpa perlu polling manual:
+
+- 🟢/🔴 **Trade buka** — pair, side, entry price, ukuran lot
+- ✅/❌ **Trade tutup** — entry → exit price, P&L pip, P&L USD, alasan, durasi
+
+> **Keamanan:** Perintah hanya diterima dari `TELEGRAM_CHAT_ID` yang terdaftar. Pesan dari chat lain langsung ditolak.
 
 ---
 
