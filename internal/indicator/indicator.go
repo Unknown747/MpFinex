@@ -2,7 +2,56 @@
 // used by trading strategies in Finex Bot.
 package indicator
 
-import "math"
+import (
+        "math"
+        "sync"
+        "time"
+)
+
+// ─── Indicator Cache ──────────────────────────────────────────────────────────
+//
+// Shared cache with a 5-second TTL so bots on the same symbol reuse computed
+// indicator values instead of recomputing on every tick.
+// The goroutine pool in main.go pre-populates the cache before bot.Tick() runs.
+
+type cacheEntry struct {
+        val    float64
+        expiry time.Time
+}
+
+var (
+        indicatorCache sync.Map
+        cacheTTL       = 5 * time.Second
+)
+
+// GetCachedIndicator retrieves a cached indicator value by key.
+// Returns (value, true) if the entry exists and has not expired.
+func GetCachedIndicator(key string) (float64, bool) {
+        v, ok := indicatorCache.Load(key)
+        if !ok {
+                return 0, false
+        }
+        e := v.(cacheEntry)
+        if time.Now().After(e.expiry) {
+                indicatorCache.Delete(key)
+                return 0, false
+        }
+        return e.val, true
+}
+
+// SetCachedIndicator stores a computed indicator value with a 5-second TTL.
+// Called by the goroutine pool in main.go after each market tick.
+func SetCachedIndicator(key string, value float64) {
+        indicatorCache.Store(key, cacheEntry{val: value, expiry: time.Now().Add(cacheTTL)})
+}
+
+// ─── Slice pool ───────────────────────────────────────────────────────────────
+
+// slicePool reuses float64 backing arrays for indicator workspace slices,
+// reducing allocator pressure when 8 pairs × 4 bots tick at 500 ms.
+var slicePool = sync.Pool{
+        New: func() any { return make([]float64, 0, 256) },
+}
 
 // ─── RSI ─────────────────────────────────────────────────────────────────────
 
@@ -114,8 +163,10 @@ func ATR(highs, lows, closes []float64, period int) float64 {
                 return 0
         }
 
-        // True Range untuk setiap candle mulai dari index 1
-        trs := make([]float64, n-1)
+        // True Range untuk setiap candle mulai dari index 1.
+        // Backing array diambil dari pool untuk mengurangi alokasi GC.
+        trs := slicePool.Get().([]float64)[:0]
+        defer func() { slicePool.Put(trs[:0]) }()
         for i := 1; i < n; i++ {
                 hl := highs[i] - lows[i]
                 hc := math.Abs(highs[i] - closes[i-1])
@@ -127,7 +178,7 @@ func ATR(highs, lows, closes []float64, period int) float64 {
                 if lc > tr {
                         tr = lc
                 }
-                trs[i-1] = tr
+                trs = append(trs, tr)
         }
 
         if len(trs) < period {

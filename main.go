@@ -4,6 +4,7 @@ import (
         "fmt"
         "os"
         "strings"
+        "sync"
         "time"
 
         "github.com/charmbracelet/bubbles/textinput"
@@ -14,6 +15,7 @@ import (
         botpkg "github.com/finex/finex-cli/internal/bot"
         "github.com/finex/finex-cli/internal/config"
         "github.com/finex/finex-cli/internal/indicator"
+        "github.com/finex/finex-cli/internal/journal"
         "github.com/finex/finex-cli/internal/logger"
         "github.com/finex/finex-cli/internal/market"
         "github.com/finex/finex-cli/internal/mt5"
@@ -25,10 +27,14 @@ import (
 type tickMsg time.Time
 
 func tickCmd() tea.Cmd {
-        return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+        return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg {
                 return tickMsg(t)
         })
 }
+
+// indicatorSem is a goroutine pool semaphore that limits concurrent indicator
+// computations to 4 goroutines regardless of how many symbols are active.
+var indicatorSem = make(chan struct{}, 4)
 
 // ─── MT5 Connection ──────────────────────────────────────────────────────────
 
@@ -300,6 +306,9 @@ type Model struct {
 
         // Paper trading
         dryRun bool
+
+        // Trade journal — records all closed trades and generates equity_chart.html
+        journal *journal.Journal
 }
 
 // logPath is where the activity log is written.
@@ -330,6 +339,9 @@ func initialModel(dryRun bool) Model {
                 lg.SessionStart("1.0.0", mode)
         }
 
+        // Open trade journal (best-effort; bot runs fine without it).
+        jnl := journal.New("trade_journal.jsonl", dm.Equity)
+
         m := Model{
                 activeTab:    TabDashboard,
                 viewMode:     ViewList,
@@ -345,6 +357,7 @@ func initialModel(dryRun bool) Model {
                 lastDailyLog: time.Now(),
                 peakEquity:   dm.Equity,
                 dryRun:       dryRun,
+                journal:      jnl,
         }
 
         // Wire trade callbacks so every open/close is logged automatically.
@@ -352,6 +365,67 @@ func initialModel(dryRun bool) Model {
 
         m.initBotForm()
         return m
+}
+
+// preComputeIndicators pre-computes RSI, ATR, EMA, and Bollinger Bands for
+// every symbol that has at least one active bot, using a goroutine pool
+// (indicatorSem, max 4 workers) to bound CPU consumption.
+//
+// Results are stored in the shared indicator cache (5-second TTL).  Bot.Tick()
+// reads the cache via GetCachedIndicator and only falls back to direct
+// computation on a cache miss, which eliminates redundant work when multiple
+// bots trade the same currency pair.
+func (m *Model) preComputeIndicators() {
+        // Collect unique symbols from bots that currently need market data.
+        symSet := make(map[string]struct{})
+        for _, b := range m.bots {
+                if b.IsRunning || b.PendingLimit != nil || b.OpenTrade != nil {
+                        symSet[b.Symbol] = struct{}{}
+                }
+        }
+        if len(symSet) == 0 {
+                return
+        }
+
+        var wg sync.WaitGroup
+        for sym := range symSet {
+                sym := sym
+                wg.Add(1)
+                indicatorSem <- struct{}{} // acquire slot (blocks when pool is full)
+                go func() {
+                        defer wg.Done()
+                        defer func() { <-indicatorSem }()
+
+                        closes := m.mkt.GetCloses(sym)
+                        highs, lows := m.mkt.GetHighLows(sym)
+
+                        // RSI — Scalping uses period 7, MeanReversion uses period 14
+                        indicator.SetCachedIndicator("RSI7_"+sym, indicator.RSI(closes, 7))
+                        indicator.SetCachedIndicator("RSI14_"+sym, indicator.RSI(closes, 14))
+
+                        // ATR(14) — used for lot sizing and SL/TP distance
+                        indicator.SetCachedIndicator("ATR14_"+sym, indicator.ATR(highs, lows, closes, 14))
+
+                        // Bollinger Bands — Swing (2σ) and MeanReversion (1.5σ)
+                        _, bb20u, bb20l := indicator.BollingerBands(closes, 20, 2.0)
+                        indicator.SetCachedIndicator("BB20u_"+sym, bb20u)
+                        indicator.SetCachedIndicator("BB20l_"+sym, bb20l)
+                        _, bb15u, bb15l := indicator.BollingerBands(closes, 20, 1.5)
+                        indicator.SetCachedIndicator("BB15u_"+sym, bb15u)
+                        indicator.SetCachedIndicator("BB15l_"+sym, bb15l)
+
+                        // EMA(9/21) current + previous tick — TrendFollowing crossover
+                        indicator.SetCachedIndicator("EMA9_"+sym, indicator.EMA(closes, 9))
+                        indicator.SetCachedIndicator("EMA21_"+sym, indicator.EMA(closes, 21))
+                        n := len(closes)
+                        if n > 1 {
+                                prev := closes[:n-1]
+                                indicator.SetCachedIndicator("EMA9p_"+sym, indicator.EMA(prev, 9))
+                                indicator.SetCachedIndicator("EMA21p_"+sym, indicator.EMA(prev, 21))
+                        }
+                }()
+        }
+        wg.Wait()
 }
 
 // wireBotLogCallbacks attaches OnTradeOpen / OnTradeClose to every bot.
@@ -370,17 +444,48 @@ func (m *Model) wireBotLogCallbacks() {
                         )
                 }
                 b.OnTradeClose = func(ev botpkg.TradeEvent) {
-                        if m.log == nil {
-                                return
+                        if m.log != nil {
+                                m.log.TradeClose(
+                                        ev.Bot.ID, ev.Bot.Name,
+                                        ev.Trade.Symbol, string(ev.Trade.Side),
+                                        ev.Trade.ID,
+                                        ev.Trade.EntryPrice, ev.Trade.ExitPrice,
+                                        ev.Trade.PnL, ev.Trade.Quantity,
+                                        ev.Trade.OpenedAt, ev.Trade.ClosedAt,
+                                )
                         }
-                        m.log.TradeClose(
-                                ev.Bot.ID, ev.Bot.Name,
-                                ev.Trade.Symbol, string(ev.Trade.Side),
-                                ev.Trade.ID,
-                                ev.Trade.EntryPrice, ev.Trade.ExitPrice,
-                                ev.Trade.PnL, ev.Trade.Quantity,
-                                ev.Trade.OpenedAt, ev.Trade.ClosedAt,
-                        )
+                        if m.journal != nil {
+                                t := ev.Trade
+                                pip := botpkg.DefaultSymbolInfo[t.Symbol].PipSize
+                                if pip == 0 {
+                                        pip = 0.0001
+                                }
+                                profitPips := (t.ExitPrice - t.EntryPrice) / pip
+                                if t.Side == botpkg.Sell {
+                                        profitPips = -profitPips
+                                }
+                                riskPct := ev.Bot.RiskPct
+                                if ev.Bot.Profile != nil {
+                                        riskPct = ev.Bot.Profile.EffectiveRisk()
+                                }
+                                m.journal.Record(journal.TradeRecord{
+                                        ID:             fmt.Sprintf("%s_%s_%d", t.Symbol, string(t.Side), t.OpenedAt.UnixNano()),
+                                        Timestamp:      t.ClosedAt,
+                                        Symbol:         t.Symbol,
+                                        Strategy:       string(ev.Bot.Strategy),
+                                        Direction:      string(t.Side),
+                                        EntryPrice:     t.EntryPrice,
+                                        ExitPrice:      t.ExitPrice,
+                                        ProfitPips:     profitPips,
+                                        ProfitUSD:      t.PnL,
+                                        RiskPercent:    riskPct,
+                                        ExitReason:     t.CloseReason,
+                                        SlippagePips:   t.SlippagePips,
+                                        HoldingMinutes: t.ClosedAt.Sub(t.OpenedAt).Minutes(),
+                                        MAEPips:        t.MAEPips,
+                                        MFEPips:        t.MFEPips,
+                                })
+                        }
                 }
         }
 }
@@ -498,6 +603,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
         case tickMsg:
                 m.tickCount++
                 m.mkt.Tick()
+
+                // Pre-compute indicators for all active symbols using goroutine pool
+                // (max 4 concurrent) so bots on the same pair share results.
+                m.preComputeIndicators()
+
                 acc := m.currentAccount()
                 openPnL := 0.0
                 for _, b := range m.bots {

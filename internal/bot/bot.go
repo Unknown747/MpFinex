@@ -64,6 +64,14 @@ type Trade struct {
 
         // Jumlah tick sejak trade dibuka — digunakan oleh MonitorDivergence (scan tiap 10 tick).
         TicksSinceOpen int
+
+        // Excursion metrics (diperbarui setiap tick selama trade terbuka)
+        MAEPips float64 // max adverse excursion dari entry dalam pip (positif)
+        MFEPips float64 // max favorable excursion dari entry dalam pip (positif)
+
+        // Metadata penutupan (diisi saat closeTrade dipanggil)
+        CloseReason  string  // tp_hit / sl_hit / divergence / reversal_signal / forced_close
+        SlippagePips float64 // slippage aktual saat fill dalam pip (dry-run saja)
 }
 
 // LimitOrder mewakili pending limit order yang menunggu harga mencapai level tertentu
@@ -160,7 +168,7 @@ func (b *Bot) CloseAllPositions(currentPrice float64) {
         } else {
                 pnlPct = (entry - currentPrice) / entry
         }
-        b.closeTrade(currentPrice, pnlPct)
+        b.closeTrade(currentPrice, pnlPct, "forced_close")
 }
 
 func (b *Bot) Tick(mkt *market.Market, accountBalance float64) {
@@ -224,17 +232,91 @@ func (b *Bot) Tick(mkt *market.Market, accountBalance float64) {
 
 // getSignal evaluates the indicator for this bot's strategy and returns a
 // directional signal. None means "no trade yet".
+//
+// Cache-first: values pre-computed by main.go's goroutine pool (keyed
+// "RSI7_EURUSD", "EMA9_GBPUSD", etc.) are used when fresh (TTL 5 s).
+// Falls back to computing on the fly if the cache is cold or has expired.
 func (b *Bot) getSignal(closes []float64) indicator.Signal {
+        sym := b.Symbol
+
         switch b.Strategy {
+
         case Scalping:
-                return indicator.ScalpingSignal(closes)
+                rsi, ok := indicator.GetCachedIndicator("RSI7_" + sym)
+                if !ok {
+                        rsi = indicator.RSI(closes, 7)
+                }
+                if rsi < 38 {
+                        return indicator.Long
+                }
+                if rsi > 62 {
+                        return indicator.Short
+                }
+                return indicator.None
+
         case SwingTrading:
-                return indicator.SwingSignal(closes)
+                upper, okU := indicator.GetCachedIndicator("BB20u_" + sym)
+                lower, okL := indicator.GetCachedIndicator("BB20l_" + sym)
+                if !okU || !okL || upper == 0 {
+                        return indicator.SwingSignal(closes)
+                }
+                if len(closes) == 0 {
+                        return indicator.None
+                }
+                price := closes[len(closes)-1]
+                if price <= lower {
+                        return indicator.Long
+                }
+                if price >= upper {
+                        return indicator.Short
+                }
+                return indicator.None
+
         case TrendFollowing:
-                return indicator.TrendSignal(closes)
+                fast, ok1 := indicator.GetCachedIndicator("EMA9_" + sym)
+                slow, ok2 := indicator.GetCachedIndicator("EMA21_" + sym)
+                pFast, ok3 := indicator.GetCachedIndicator("EMA9p_" + sym)
+                pSlow, ok4 := indicator.GetCachedIndicator("EMA21p_" + sym)
+                if !ok1 || !ok2 || !ok3 || !ok4 {
+                        return indicator.TrendSignal(closes)
+                }
+                if fast == 0 || slow == 0 || pFast == 0 || pSlow == 0 {
+                        return indicator.None
+                }
+                if pFast <= pSlow && fast > slow {
+                        return indicator.Long
+                }
+                if pFast >= pSlow && fast < slow {
+                        return indicator.Short
+                }
+                return indicator.None
+
         case MeanReversion:
-                return indicator.MeanReversionSignal(closes)
+                rsi, okR := indicator.GetCachedIndicator("RSI14_" + sym)
+                upper, okU := indicator.GetCachedIndicator("BB15u_" + sym)
+                lower, okL := indicator.GetCachedIndicator("BB15l_" + sym)
+                if !okR || !okU || !okL {
+                        return indicator.MeanReversionSignal(closes)
+                }
+                if len(closes) == 0 {
+                        return indicator.None
+                }
+                price := closes[len(closes)-1]
+                if rsi < 35 {
+                        return indicator.Long
+                }
+                if rsi > 65 {
+                        return indicator.Short
+                }
+                if upper > 0 && price <= lower {
+                        return indicator.Long
+                }
+                if upper > 0 && price >= upper {
+                        return indicator.Short
+                }
+                return indicator.None
         }
+
         return indicator.None
 }
 
@@ -272,12 +354,17 @@ func (b *Bot) openTrade(price, balance float64, sig indicator.Signal, mkt *marke
                 pipSize = 0.0001
         }
 
-        // Hitung ATR-based SL/TP dan lot size untuk semua strategy kecuali Scalping
+        // Hitung ATR-based SL/TP dan lot size untuk semua strategy kecuali Scalping.
+        // ATR diambil dari cache shared (pre-computed oleh goroutine pool di main.go).
+        // Fallback ke komputasi langsung hanya jika cache miss (tick pertama / TTL habis).
         var slDist, tpDist, qty float64
         if b.Strategy != Scalping {
-                highs, lows := mkt.GetHighLows(b.Symbol)
-                closes := mkt.GetCloses(b.Symbol)
-                atr := indicator.ATR(highs, lows, closes, 14)
+                atr, atrOK := indicator.GetCachedIndicator("ATR14_" + b.Symbol)
+                if !atrOK {
+                        highs, lows := mkt.GetHighLows(b.Symbol)
+                        atrCloses := mkt.GetCloses(b.Symbol)
+                        atr = indicator.ATR(highs, lows, atrCloses, 14)
+                }
                 if atr > 0 {
                         slDist = 1.5 * atr
                         tpDist = 3.0 * atr
@@ -356,15 +443,20 @@ func (b *Bot) checkFillLimit(currentPrice float64) {
 // Slippage ±1 pip diterapkan pada mode dry-run untuk realisme.
 // SL/TP dihitung dari entryPrice + SLDist/TPDist; jika keduanya 0 → gunakan % fallback.
 func (b *Bot) executeTrade(side TradeSide, entryPrice, qty, slDist, tpDist float64) {
-        // Terapkan slippage acak ±1 pip pada paper trade
+        // Terapkan slippage acak ±1 pip pada paper trade; simpan besarnya dalam pip.
+        var slippagePips float64
         if b.DryRun {
                 symInfo := DefaultSymbolInfo[b.Symbol]
                 pip := symInfo.PipSize
                 if pip == 0 {
                         pip = 0.0001
                 }
-                slippage := (b.rng.Float64()*2 - 1) * pip
-                entryPrice += slippage
+                slip := (b.rng.Float64()*2 - 1) * pip
+                entryPrice += slip
+                if slip < 0 {
+                        slip = -slip
+                }
+                slippagePips = slip / pip
         }
 
         var slPrice, tpPrice float64
@@ -380,17 +472,18 @@ func (b *Bot) executeTrade(side TradeSide, entryPrice, qty, slDist, tpDist float
 
         b.tradeCounter++
         trade := &Trade{
-                ID:         b.tradeCounter,
-                BotID:      b.ID,
-                Symbol:     b.Symbol,
-                Side:       side,
-                Quantity:   qty,
-                EntryPrice: entryPrice,
-                SLPrice:    slPrice,
-                TPPrice:    tpPrice,
-                Status:     Open,
-                OpenedAt:   time.Now(),
-                IsDryRun:   b.DryRun,
+                ID:           b.tradeCounter,
+                BotID:        b.ID,
+                Symbol:       b.Symbol,
+                Side:         side,
+                Quantity:     qty,
+                EntryPrice:   entryPrice,
+                SLPrice:      slPrice,
+                TPPrice:      tpPrice,
+                Status:       Open,
+                OpenedAt:     time.Now(),
+                IsDryRun:     b.DryRun,
+                SlippagePips: slippagePips,
         }
         b.OpenTrade = trade
 
@@ -415,6 +508,28 @@ func (b *Bot) checkCloseCondition(currentPrice float64, closes, highs, lows []fl
         // Perbarui breakeven / trailing stop setiap tick (juga increment TicksSinceOpen)
         UpdateTrailingStop(b.OpenTrade, currentPrice, b.Symbol)
 
+        // Update MAE/MFE setiap tick: lacak excursion terbesar dari entry price dalam pip.
+        {
+                pip := DefaultSymbolInfo[b.Symbol].PipSize
+                if pip == 0 {
+                        pip = 0.0001
+                }
+                var adverse, favorable float64
+                if b.OpenTrade.Side == Buy {
+                        adverse = (b.OpenTrade.EntryPrice - currentPrice) / pip
+                        favorable = (currentPrice - b.OpenTrade.EntryPrice) / pip
+                } else {
+                        adverse = (currentPrice - b.OpenTrade.EntryPrice) / pip
+                        favorable = (b.OpenTrade.EntryPrice - currentPrice) / pip
+                }
+                if adverse > b.OpenTrade.MAEPips {
+                        b.OpenTrade.MAEPips = adverse
+                }
+                if favorable > b.OpenTrade.MFEPips {
+                        b.OpenTrade.MFEPips = favorable
+                }
+        }
+
         entry := b.OpenTrade.EntryPrice
         pnlPct := pnlPercent(b.OpenTrade.Side, entry, currentPrice)
 
@@ -424,7 +539,7 @@ func (b *Bot) checkCloseCondition(currentPrice float64, closes, highs, lows []fl
                 divDir = "SELL"
         }
         if MonitorDivergence(highs, lows, closes, divDir, b.OpenTrade.TicksSinceOpen) {
-                b.closeTrade(currentPrice, pnlPct)
+                b.closeTrade(currentPrice, pnlPct, "divergence")
                 return
         }
 
@@ -453,7 +568,11 @@ func (b *Bot) checkCloseCondition(currentPrice float64, closes, highs, lows []fl
         }
 
         if tpHit || slHit {
-                b.closeTrade(currentPrice, pnlPct)
+                reason := "sl_hit"
+                if tpHit {
+                        reason = "tp_hit"
+                }
+                b.closeTrade(currentPrice, pnlPct, reason)
                 return
         }
 
@@ -465,15 +584,16 @@ func (b *Bot) checkCloseCondition(currentPrice float64, closes, highs, lows []fl
                 if sig != indicator.None {
                         isLong := b.OpenTrade.Side == Buy
                         if (isLong && sig == indicator.Short) || (!isLong && sig == indicator.Long) {
-                                b.closeTrade(currentPrice, pnlPct)
+                                b.closeTrade(currentPrice, pnlPct, "reversal_signal")
                         }
                 }
         }
 }
 
-func (b *Bot) closeTrade(exitPrice, pnlPct float64) {
+func (b *Bot) closeTrade(exitPrice, pnlPct float64, reason string) {
         trade := b.OpenTrade
         trade.ExitPrice = exitPrice
+        trade.CloseReason = reason
         trade.Status = Closed
         trade.ClosedAt = time.Now()
 

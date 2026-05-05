@@ -198,6 +198,65 @@ Set via Replit Secrets / userenv:
 - `runOptimizer()` di `main.go`: print tabel fitness/win rate/profit factor + params per strategy
 - Strategy yang dioptimalkan: Scalping, Trend Following, Swing Trading, Mean Reversion
 
+## Memory & CPU Optimization (Bagian F)
+
+### Goroutine Pool + Shared Indicator Cache
+- `indicatorSem` — package-level semaphore `chan struct{}` kapasitas **4** (max goroutine bersamaan)
+- `preComputeIndicators()` — method pada Model; dipanggil setiap tick **sebelum** bot.Tick() loop
+  * Kumpulkan unique symbols dari bot yang IsRunning / PendingLimit / OpenTrade
+  * Spawn goroutine per symbol, dibatasi oleh `indicatorSem`
+  * Pre-compute RSI7, RSI14, ATR14, BB(20,2σ), BB(20,1.5σ), EMA9, EMA21, EMA9p, EMA21p
+  * `wg.Wait()` sebelum bot loop → semua cache pasti fresh saat Tick() berjalan
+- Tick interval diubah dari **1 detik → 500ms** (tick buffer per spec)
+
+### Shared Indicator Cache (`internal/indicator/indicator.go`)
+- `sync.Map` + TTL 5 detik (`cacheEntry{val, expiry}`)
+- `GetCachedIndicator(key string) (float64, bool)` — return (val, true) jika belum expired
+- `SetCachedIndicator(key string, value float64)` — store dengan TTL 5 detik
+- Key format: `"RSI7_EURUSD"`, `"ATR14_GBPUSD"`, `"EMA9p_USDJPY"`, dll.
+- `slicePool sync.Pool` — pool `[]float64` kapasitas 256, dipakai di ATR untuk workspace `trs`
+  * ATR sekarang menggunakan `append` ke pooled slice alih-alih `make([]float64, n-1)` setiap tick
+  * Defer `slicePool.Put(trs[:0])` mengembalikan backing array ke pool setelah ATR selesai
+
+### Cache-first Signal (bot.go `getSignal`)
+- Setiap strategy case di `getSignal()` sekarang check cache terlebih dulu:
+  * Scalping → `GetCachedIndicator("RSI7_"+sym)`, fallback: `RSI(closes, 7)`
+  * SwingTrading → `GetCachedIndicator("BB20u/l_"+sym)`, fallback: `SwingSignal(closes)`
+  * TrendFollowing → `GetCachedIndicator("EMA9/21[p]_"+sym)`, fallback: `TrendSignal(closes)`
+  * MeanReversion → `GetCachedIndicator("RSI14_"+sym)` + `BB15u/l`, fallback: `MeanReversionSignal`
+- `openTrade()` ATR lookup: `GetCachedIndicator("ATR14_"+sym)` → skip `GetHighLows/GetCloses` jika cache hit
+
+## Automatic Trade Journal + Equity Curve (Bagian G)
+
+### Trade Journal (`internal/journal/journal.go`)
+- `TradeRecord` struct: 15 field JSON sesuai spec (id, timestamp, symbol, strategy, direction, entry/exit_price, profit_pips, profit_usd, risk_percent, exit_reason, slippage_pips, holding_minutes, mae_pips, mfe_pips)
+- `Journal` struct: thread-safe append log (`sync.Mutex`) + background goroutine untuk IO
+- `New(filePath, initialEquity)` — load existing records dari JSON Lines, regen equity curve jika ada
+- `Record(r TradeRecord)` — append in-memory, flush ke disk async (goroutine), trigger equity regen tiap 50 trade
+- `appendLine()` — open file dalam append mode (safe concurrent pada POSIX), marshal + `\n`
+- File: `trade_journal.jsonl` (satu JSON object per baris, mudah di-`grep`/`tail`)
+
+### New Trade Struct Fields (bot.go)
+- `Trade.MAEPips float64` — max adverse excursion dari entry dalam pip (positif)
+- `Trade.MFEPips float64` — max favorable excursion dari entry dalam pip (positif)
+- `Trade.CloseReason string` — diisi otomatis: `tp_hit` / `sl_hit` / `divergence` / `reversal_signal` / `forced_close`
+- `Trade.SlippagePips float64` — slippage aktual dalam pip (dry-run saja, dihitung di executeTrade)
+- MAE/MFE diperbarui setiap tick di `checkCloseCondition()` sebelum SL/TP check
+- `closeTrade(exitPrice, pnlPct, reason string)` — signature diperluas dengan `reason`; semua 4 call site diupdate
+
+### Journal Wiring (main.go `wireBotLogCallbacks`)
+- `OnTradeClose` diperluas: setelah log call, juga panggil `m.journal.Record(...)` jika journal tidak nil
+- pip size diambil dari `botpkg.DefaultSymbolInfo[symbol].PipSize`
+- `ProfitPips` dihitung: `(exit − entry) / pip` dengan tanda dibalik untuk SELL
+- `RiskPercent` diambil dari `bot.Profile.EffectiveRisk()` (current dynamic risk %)
+
+### Equity Curve HTML (`equity_chart.html`)
+- Diregenerasi setiap 50 trade (juga saat startup jika sudah ada records)
+- `GenerateEquityCurve()` — berjalan di goroutine terpisah; ambil copy records, hitung cumulative equity
+- Chart.js (CDN) line chart: equity USD vs trade index
+- Tabel per-strategy: W/Total, Win%, P&L USD, **Avg MAE (pip)**, **Avg MFE (pip)**
+- Self-contained HTML — bisa dibuka langsung di browser
+
 ## Key Design Decisions
 
 - **No crypto** — all pairs are forex majors + crosses (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, EURGBP, EURJPY)
