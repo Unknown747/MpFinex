@@ -1,4 +1,4 @@
-modules = ["nodejs-24", "python-3.11", "go-1.25"]
+modules = ["go-1.21", "bash"]
 
 [deployment]
 router = "application"
@@ -32,7 +32,7 @@ args = "go build -o finex-bot . && ./finex-bot"
 outputType = "console"
 
 [agent]
-stack = "PNPM_WORKSPACE"
+stack = "BEST_EFFORT_FALLBACK"
 expertMode = true
 
 [postMerge]
@@ -58,3 +58,6 @@ FINEX_COMPANY = "FinexBisnisSolusi"
 FINEX_LOGIN = "61369797"
 FINEX_SERVER = "FinexBisnisSolusi-Demo"
 FINEX_HOST = "prod-mt5-demo1.fnx.xmt.mx:443"
+
+[nix]
+channel = "stable-25_05"
