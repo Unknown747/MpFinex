@@ -2,7 +2,6 @@ package main
 
 import (
         "fmt"
-        "math"
         "os"
         "strings"
         "time"
@@ -14,6 +13,7 @@ import (
         "github.com/finex/finex-cli/internal/account"
         botpkg "github.com/finex/finex-cli/internal/bot"
         "github.com/finex/finex-cli/internal/config"
+        "github.com/finex/finex-cli/internal/indicator"
         "github.com/finex/finex-cli/internal/logger"
         "github.com/finex/finex-cli/internal/market"
         "github.com/finex/finex-cli/internal/mt5"
@@ -927,50 +927,200 @@ func pnlColor(v float64) lipgloss.Color {
 
 // ─── Markets ──────────────────────────────────────────────────────────────────
 
+// pctB computes the Bollinger %B value: 0 = at lower band, 100 = at upper band.
+// Returns 50 when bands are flat or not enough data.
+func pctB(closes []float64) float64 {
+        if len(closes) == 0 {
+                return 50
+        }
+        _, upper, lower := indicator.BollingerBands(closes, 20, 2.0)
+        if upper == lower {
+                return 50
+        }
+        price := closes[len(closes)-1]
+        v := (price - lower) / (upper - lower) * 100
+        if v < 0 {
+                return 0
+        }
+        if v > 100 {
+                return 100
+        }
+        return v
+}
+
+// renderRSIBar draws a 10-block filled bar representing RSI 0–100.
+// Color zones: green < 38 (oversold), yellow 38–62 (neutral), red > 62 (overbought).
+func renderRSIBar(rsi float64) string {
+        const width = 10
+        filled := int(rsi/10 + 0.5)
+        if filled < 0 {
+                filled = 0
+        }
+        if filled > width {
+                filled = width
+        }
+        var sb strings.Builder
+        for i := 0; i < width; i++ {
+                if i < filled {
+                        sb.WriteString("▓")
+                } else {
+                        sb.WriteString("░")
+                }
+        }
+        bar := sb.String()
+        var col lipgloss.Color
+        switch {
+        case rsi < 38:
+                col = colorGreen
+        case rsi > 62:
+                col = colorRed
+        default:
+                col = colorYellow
+        }
+        return lipgloss.NewStyle().Foreground(col).Render(bar)
+}
+
+// renderBBBar draws a 12-slot bar showing price position within Bollinger Bands.
+// ● marks the current price; < 20% = green (near lower), > 80% = red (near upper).
+func renderBBBar(pb float64) string {
+        const slots = 12
+        pos := int(pb / 100 * float64(slots-1) + 0.5)
+        if pos < 0 {
+                pos = 0
+        }
+        if pos >= slots {
+                pos = slots - 1
+        }
+        var sb strings.Builder
+        for i := 0; i < slots; i++ {
+                if i == pos {
+                        sb.WriteString("●")
+                } else {
+                        sb.WriteString("─")
+                }
+        }
+        bar := sb.String()
+        var col lipgloss.Color
+        switch {
+        case pb < 20:
+                col = colorGreen
+        case pb > 80:
+                col = colorRed
+        default:
+                col = colorMuted
+        }
+        return lipgloss.NewStyle().Foreground(col).Render(bar)
+}
+
+// signalInfo returns a styled label + arrow for a given indicator.Signal.
+func signalInfo(sig indicator.Signal) string {
+        switch sig {
+        case indicator.Long:
+                return greenStyle.Render("LONG  ↑")
+        case indicator.Short:
+                return redStyle.Render("SHORT ↓")
+        default:
+                return mutedStyle.Render("WAIT  –")
+        }
+}
+
 func (m Model) renderMarkets() string {
         prices := m.mkt.GetAllPrices()
+        cardW := m.width - 6
 
+        // ── Indicator table ──────────────────────────────────────────────────────
+        hdr := fmt.Sprintf("  %-8s %-10s %-8s   %-22s %-18s  %-9s",
+                "Symbol", "Price", "Chg%", "RSI(7)  [bar]  val", "[%B 2σ]  val", "Signal")
         var rows []string
-        header := fmt.Sprintf("  %-14s %-16s %-12s %-12s %-16s %-16s",
-                "Symbol", "Price", "Change", "Change %", "24h High", "24h Low")
         rows = append(rows,
-                titleStyle.Render(header),
-                mutedStyle.Render("  "+strings.Repeat("─", 86)),
+                titleStyle.Render(hdr),
+                mutedStyle.Render("  "+strings.Repeat("─", cardW-6)),
         )
 
         for _, p := range prices {
-                dir := "▲"
-                cs := greenStyle
-                if p.Change < 0 {
-                        dir = "▼"
-                        cs = redStyle
+                closes := m.mkt.GetCloses(p.Symbol)
+
+                // RSI(7)
+                rsiVal := indicator.RSI(closes, 7)
+                rsiBar := renderRSIBar(rsiVal)
+
+                // Bollinger %B
+                pb := pctB(closes)
+                bbBar := renderBBBar(pb)
+
+                // Composite signal: all 4 strategies — show the dominant one.
+                // Priority: Scalping > MeanReversion > TrendFollowing > SwingTrading.
+                sig := indicator.ScalpingSignal(closes)
+                if sig == indicator.None {
+                        sig = indicator.MeanReversionSignal(closes)
                 }
-                row := fmt.Sprintf("  %-14s %-16.4f %s  %-10.4f  %s  %-16.4f %-16.4f",
+                if sig == indicator.None {
+                        sig = indicator.TrendSignal(closes)
+                }
+                if sig == indicator.None {
+                        sig = indicator.SwingSignal(closes)
+                }
+
+                // Change %
+                chgStyle := greenStyle
+                chgArrow := "▲"
+                if p.Change < 0 {
+                        chgStyle = redStyle
+                        chgArrow = "▼"
+                }
+                chgStr := chgStyle.Render(fmt.Sprintf("%s%+.2f%%", chgArrow, p.ChangePct))
+
+                row := fmt.Sprintf("  %-8s %-10.4f %-16s  %s %-5.1f   [%s] %4.0f%%   %s",
                         p.Symbol,
                         p.Price,
-                        cs.Render(dir),
-                        math.Abs(p.Change),
-                        cs.Render(fmt.Sprintf("%+.2f%%", p.ChangePct)),
-                        p.High24h,
-                        p.Low24h,
+                        chgStr,
+                        rsiBar,
+                        rsiVal,
+                        bbBar,
+                        pb,
+                        signalInfo(sig),
                 )
                 rows = append(rows, row)
         }
 
-        // Mini sparkline chart for EURUSD
-        chartTitle := titleStyle.Render("\n  EURUSD Price Chart (last 20 ticks)")
-        btcHistory := m.mkt.GetHistory("EURUSD")
-        chart := renderSparkline(btcHistory, m.width-8)
+        indicatorCard := cardStyle.Width(cardW).Render(
+                titleStyle.Render("  Live Indicators\n") +
+                        strings.Join(rows, "\n"),
+        )
 
-        table := cardStyle.Width(m.width - 4).Render(
-                strings.Join(rows, "\n"),
+        // ── Legend ───────────────────────────────────────────────────────────────
+        legendLine1 := fmt.Sprintf("  RSI(7): %s < 38 Oversold   %s 38–62 Neutral   %s > 62 Overbought",
+                greenStyle.Render("▓▓▓▓▓▓▓▓▓▓"),
+                yellowStyle.Render("▓▓▓▓▓▓▓▓▓▓"),
+                redStyle.Render("▓▓▓▓▓▓▓▓▓▓"),
         )
-        chartCard := cardStyle.Width(m.width - 4).Render(
-                chartTitle + "\n" + chart,
+        legendLine2 := fmt.Sprintf("  %%B:    %s < 20%% Near lower band   %s 20–80%% Inside bands   %s > 80%% Near upper band",
+                greenStyle.Render("●"),
+                mutedStyle.Render("●"),
+                redStyle.Render("●"),
         )
+        legendLine3 := fmt.Sprintf("  Signal: %s Buy  %s Sell  %s No setup — composite of Scalp/MeanRev/Trend/Swing",
+                greenStyle.Render("LONG ↑"),
+                redStyle.Render("SHORT ↓"),
+                mutedStyle.Render("WAIT –"),
+        )
+        legendCard := cardStyle.Width(cardW).Render(
+                titleStyle.Render("  Legend\n") +
+                        legendLine1 + "\n" + legendLine2 + "\n" + legendLine3,
+        )
+
+        // ── EURUSD sparkline ─────────────────────────────────────────────────────
+        history := m.mkt.GetHistory("EURUSD")
+        sparkTitle := titleStyle.Render("  EURUSD — Price Chart (last 30 candles)")
+        spark := renderSparkline(history, cardW-6)
+        sparkCard := cardStyle.Width(cardW).Render(sparkTitle + "\n\n" + spark)
 
         return lipgloss.NewStyle().Padding(1, 2).Render(
-                lipgloss.JoinVertical(lipgloss.Left, table, " ", chartCard),
+                lipgloss.JoinVertical(lipgloss.Left,
+                        indicatorCard, " ",
+                        legendCard, " ",
+                        sparkCard,
+                ),
         )
 }
 
@@ -1015,7 +1165,7 @@ func renderSparkline(candles []market.Candle, width int) string {
                 }
                 out.WriteString(lipgloss.NewStyle().Foreground(col).Render(bars[idx]))
         }
-        out.WriteString(fmt.Sprintf("  %.2f – %.2f USD", minP, maxP))
+        out.WriteString(fmt.Sprintf("  %.5f – %.5f", minP, maxP))
         return out.String()
 }
 
