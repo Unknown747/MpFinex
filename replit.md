@@ -115,6 +115,50 @@ Set via Replit Secrets / userenv:
 - Session log dimulai dengan mode `"DRY-RUN"` (bukan `"DEMO"`)
 - `DryRun bool` di-wire ke setiap bot dari `initialModel(dryRun bool)`
 
+## Integrasi & Perbaikan Dasar (Bagian 4)
+
+### A. Real Price Feed (`internal/mt5/pricefeed.go`)
+- Struct `PriceFeed` dengan `sync.RWMutex`, map `latest` per simbol
+- `Start(client, mkt, symbols)` — goroutine background, non-blocking
+- Subscribe ke MT5 menggunakan `CmdSubscribeTick (0x0100)` per simbol (null-terminated body)
+- Baca paket `CmdTickData (0x0101)` → decode `parseTickPacket()` → update `mkt.UpdatePrice()`
+- Jika server tidak support command (fallback): berhenti gracefully, market simulator tetap jalan
+- `market.UpdatePrice(symbol, price)` ditambahkan ke `Market` sebagai titik inject data live
+- `Stop()`, `IsRunning()`, `GetLatest(symbol)` tersedia untuk manajemen lifecycle
+
+### B. News Time Filter (`internal/utils/news.go`)
+- `IsNewsTime() bool` — cek waktu UTC saat ini terhadap semua event berdampak tinggi
+- `ActiveNewsName() string` — nama event yang sedang aktif (untuk ditampilkan di UI)
+- Tiga jenis event ter-cover:
+  * **NFP** (Non-Farm Payroll): Jumat pertama tiap bulan, 13:30 UTC — dihitung dinamis
+  * **FOMC Rate Decision**: 8x/tahun, 19:00 UTC — hardcoded 2025 & 2026
+  * **US CPI**: bulanan, 13:30 UTC — hardcoded 2025 & 2026
+- Blackout window: **±15 menit** dari setiap event (total 30 menit per event)
+- Diintegrasikan ke `bot.Tick()`: semua entry dilewati saat `IsNewsTime()` = true
+
+## Optimalisasi Lanjutan (Bagian 5)
+
+### A. Smart Money Concepts — Order Block + FVG (`internal/strategy/smart_money.go`)
+- `Analyze(candles, direction) SmartMoneyResult` — satu panggilan untuk semua analisis SMC
+- **Order Block**:
+  * BUY OB: candle bullish → candle bearish berikutnya (demand zone)
+  * SELL OB: candle bearish → candle bullish berikutnya (supply zone)
+- **Fair Value Gap (FVG)**:
+  * Upward FVG: `Low[candle+2] > High[candle]` (gap permintaan)
+  * Downward FVG: `High[candle+2] < Low[candle]` (gap penawaran)
+- Scan 5 candle terakhir (`lookbackCandles = 5`)
+- Weight: 0.30 jika FVG terdeteksi (konfirmasi lebih kuat)
+- Diintegrasikan ke `openTrade()`: entry hanya dilakukan jika `smResult.Confirmed = true` (non-Scalping)
+
+### B. Adaptive TP — RSI Divergence Monitor (`internal/bot/trade_manager.go`)
+- `MonitorDivergence(highs, lows, closes, direction, ticksSinceOpen) bool`
+- Scan hanya setiap 10 tick (`ticksSinceOpen % 10 == 0`) untuk hemat CPU
+- **Hidden bullish divergence** (price LL + RSI HL) → exit BUY lebih awal
+- **Hidden bearish divergence** (price HH + RSI LH) → exit SELL lebih awal
+- `Trade.TicksSinceOpen` diinkremen setiap tick oleh `UpdateTrailingStop`
+- `checkCloseCondition` diperluas dengan `highs, lows []float64` parameter
+- Dipanggil di `checkCloseCondition` setelah trailing stop update, sebelum SL/TP check
+
 ## Key Design Decisions
 
 - **No crypto** — all pairs are forex majors + crosses (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, EURGBP, EURJPY)

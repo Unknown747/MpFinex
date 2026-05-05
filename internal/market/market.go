@@ -182,6 +182,29 @@ func (m *Market) GetPrice(symbol string) *Price {
         return m.prices[symbol]
 }
 
+// UpdatePrice memperbarui harga live untuk simbol tertentu.
+// Dipanggil oleh PriceFeed saat tick baru tiba dari MT5.
+// Jika simbol tidak dikenal, update diabaikan.
+func (m *Market) UpdatePrice(symbol string, newPrice float64) {
+        p, ok := m.prices[symbol]
+        if !ok || newPrice <= 0 {
+                return
+        }
+        p.Prev = p.Price
+        p.Price = newPrice
+        p.Change = newPrice - p.Prev
+        if p.Prev > 0 {
+                p.ChangePct = (p.Change / p.Prev) * 100
+        }
+        if newPrice > p.High24h {
+                p.High24h = newPrice
+        }
+        if newPrice < p.Low24h {
+                p.Low24h = newPrice
+        }
+        p.LastUpdated = time.Now()
+}
+
 func (m *Market) GetAllPrices() []*Price {
         symbols := []string{
                 "EURUSD", "GBPUSD", "USDJPY", "AUDUSD",

@@ -7,6 +7,8 @@ import (
 
         "github.com/finex/finex-cli/internal/indicator"
         "github.com/finex/finex-cli/internal/market"
+        "github.com/finex/finex-cli/internal/strategy"
+        "github.com/finex/finex-cli/internal/utils"
 )
 
 type Strategy string
@@ -59,6 +61,9 @@ type Trade struct {
 
         // true jika order ini adalah paper trade (dry-run mode)
         IsDryRun bool
+
+        // Jumlah tick sejak trade dibuka — digunakan oleh MonitorDivergence (scan tiap 10 tick).
+        TicksSinceOpen int
 }
 
 // TradeEvent carries all info about a trade open or close.
@@ -154,7 +159,8 @@ func (b *Bot) Tick(mkt *market.Market, accountBalance float64) {
         }
 
         if b.OpenTrade != nil {
-                b.checkCloseCondition(price.Price, mkt.GetCloses(b.Symbol))
+                highs, lows := mkt.GetHighLows(b.Symbol)
+                b.checkCloseCondition(price.Price, mkt.GetCloses(b.Symbol), highs, lows)
                 return
         }
 
@@ -166,6 +172,11 @@ func (b *Bot) Tick(mkt *market.Market, accountBalance float64) {
                 if !b.Risk.CheckDrawdown(accountBalance, b, price.Price) {
                         return
                 }
+        }
+
+        // News blackout — lewati semua entry saat ada rilis berita berdampak tinggi
+        if utils.IsNewsTime() {
+                return
         }
 
         closes := mkt.GetCloses(b.Symbol)
@@ -205,6 +216,21 @@ func (b *Bot) openTrade(price, balance float64, sig indicator.Signal, mkt *marke
         side := Buy
         if sig == indicator.Short {
                 side = Sell
+        }
+
+        // ── Smart Money Confirmation (non-Scalping) ───────────────────────────────
+        // Entry hanya diijinkan jika ada Order Block ATAU Fair Value Gap dalam
+        // 5 candle terakhir. Scalping dibebaskan karena waktu entry sangat sempit.
+        if b.Strategy != Scalping {
+                direction := "BUY"
+                if side == Sell {
+                        direction = "SELL"
+                }
+                candles := mkt.GetHistory(b.Symbol)
+                smResult := strategy.Analyze(candles, direction)
+                if !smResult.Confirmed {
+                        return // Tidak ada konfirmasi SMC — tunda entry
+                }
         }
 
         // Terapkan slippage acak ±1 pip pada paper trade (dry-run mode)
@@ -284,19 +310,30 @@ func (b *Bot) openTrade(price, balance float64, sig indicator.Signal, mkt *marke
 //
 // Priority:
 //  1. Update trailing stop / breakeven setiap tick.
-//  2. Gunakan SLPrice/TPPrice absolut jika sudah di-set (ATR-based).
-//  3. Fallback ke % berbasis TakeProfitPct/StopLossPct (Scalping + ATR data kurang).
-//  4. Secondary exit (TrendFollowing only): potong posisi saat sinyal berbalik.
-func (b *Bot) checkCloseCondition(currentPrice float64, closes []float64) {
+//  2. RSI divergence check setiap 10 tick (early exit).
+//  3. Gunakan SLPrice/TPPrice absolut jika sudah di-set (ATR-based).
+//  4. Fallback ke % berbasis TakeProfitPct/StopLossPct (Scalping + ATR data kurang).
+//  5. Secondary exit (TrendFollowing only): potong posisi saat sinyal berbalik.
+func (b *Bot) checkCloseCondition(currentPrice float64, closes, highs, lows []float64) {
         if b.OpenTrade == nil {
                 return
         }
 
-        // Perbarui breakeven / trailing stop setiap tick
+        // Perbarui breakeven / trailing stop setiap tick (juga increment TicksSinceOpen)
         UpdateTrailingStop(b.OpenTrade, currentPrice, b.Symbol)
 
         entry := b.OpenTrade.EntryPrice
         pnlPct := pnlPercent(b.OpenTrade.Side, entry, currentPrice)
+
+        // ── RSI Divergence: early exit setiap 10 tick ─────────────────────────────
+        divDir := "BUY"
+        if b.OpenTrade.Side == Sell {
+                divDir = "SELL"
+        }
+        if MonitorDivergence(highs, lows, closes, divDir, b.OpenTrade.TicksSinceOpen) {
+                b.closeTrade(currentPrice, pnlPct)
+                return
+        }
 
         // ── SL check: absolut jika SLPrice di-set, kalau tidak pakai % ───────────
         slHit := false
