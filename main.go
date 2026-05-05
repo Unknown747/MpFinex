@@ -5,6 +5,7 @@ import (
         "os"
         "strings"
         "sync"
+        "sync/atomic"
         "time"
 
         "github.com/charmbracelet/bubbles/textinput"
@@ -352,6 +353,10 @@ type Model struct {
 
         // Telegram bot — nil if TELEGRAM_BOT_TOKEN not set
         tgBot *telegram.Bot
+
+        // optimizerBusy is a shared atomic flag (1 = running) to prevent
+        // concurrent optimizer runs. Pointer so all model copies share state.
+        optimizerBusy *int32
 }
 
 // logPath is where the activity log is written.
@@ -403,9 +408,10 @@ func initialModel(dryRun bool) Model {
                 lastDailyLog: time.Now(),
                 peakEquity:   dm.Equity,
                 dryRun:       dryRun,
-                journal:      jnl,
-                regime:       regime,
-                corrMgr:      corrMgr,
+                journal:       jnl,
+                regime:        regime,
+                corrMgr:       corrMgr,
+                optimizerBusy: new(int32),
         }
 
         // Wire trade callbacks so every open/close is logged automatically.
@@ -1061,6 +1067,69 @@ func (m *Model) handleTelegramCmd(cmd telegram.Command) {
                 } else {
                         tg.Send(lines)
                 }
+
+        case telegram.CmdOptimize:
+                symbol := strings.ToUpper(strings.TrimSpace(cmd.Arg))
+                validSymbols := map[string]bool{
+                        "EURUSD": true, "GBPUSD": true, "USDJPY": true, "AUDUSD": true,
+                        "USDCAD": true, "USDCHF": true, "EURGBP": true, "EURJPY": true,
+                }
+                if symbol == "" {
+                        tg.Send("⚠️ Gunakan: /optimize &lt;SYMBOL&gt;\nContoh: /optimize EURUSD\n\nSimbol tersedia: EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, EURGBP, EURJPY")
+                        return
+                }
+                if !validSymbols[symbol] {
+                        tg.Send(fmt.Sprintf("❓ Simbol <b>%s</b> tidak dikenal.\nSimbol tersedia: EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, EURGBP, EURJPY", symbol))
+                        return
+                }
+                if !atomic.CompareAndSwapInt32(m.optimizerBusy, 0, 1) {
+                        tg.Send("⏳ Optimizer sedang berjalan. Tunggu sebentar hingga selesai.")
+                        return
+                }
+                tg.Send(fmt.Sprintf(
+                        "⚙️ <b>Optimizer GA dimulai untuk %s</b>\n"+
+                                "Menjalankan 4 strategi × 10 generasi × 20 kromosom...\n"+
+                                "Ini mungkin butuh 1–2 menit. Hasil dikirim otomatis saat selesai.",
+                        symbol,
+                ))
+                mkt := m.mkt
+                busyFlag := m.optimizerBusy
+                go func() {
+                        defer atomic.StoreInt32(busyFlag, 0)
+                        strategies := []string{"Scalping", "Trend Following", "Swing Trading", "Mean Reversion"}
+                        candles := mkt.GetHistory(symbol)
+                        if len(candles) == 0 {
+                                tg.Send(fmt.Sprintf("❌ Tidak ada data candle untuk <b>%s</b>.", symbol))
+                                return
+                        }
+                        type stratResult struct {
+                                name   string
+                                result optimizer.OptimizedResult
+                        }
+                        results := make([]optimizer.OptimizedResult, 0, len(strategies))
+                        lines := fmt.Sprintf("✅ <b>Hasil Optimizer — %s</b>\n\n", symbol)
+                        for _, strat := range strategies {
+                                r := optimizer.Optimize(symbol, strat, candles)
+                                results = append(results, r)
+                                lines += fmt.Sprintf(
+                                        "<b>%s</b>\n"+
+                                                "  Fitness: %.4f | WinRate: %.1f%% | PF: %.2f\n"+
+                                                "  RSI(%d) buy&lt;%.0f sell&gt;%.0f\n"+
+                                                "  EMA(%d/%d) | BB(%d, %.1fσ)\n\n",
+                                        strat,
+                                        r.Fitness, r.WinRate, r.ProfitFactor,
+                                        r.Params.RSIPeriod, r.Params.RSIBuy, r.Params.RSISell,
+                                        r.Params.EMAFast, r.Params.EMASlow,
+                                        r.Params.BBPeriod, r.Params.BBMult,
+                                )
+                        }
+                        if err := optimizer.SaveResults(results); err != nil {
+                                lines += fmt.Sprintf("⚠️ Gagal simpan ke file: %v", err)
+                        } else {
+                                lines += "💾 Hasil disimpan ke <code>optimized_params.json</code>"
+                        }
+                        tg.Send(lines)
+                }()
 
         case telegram.CmdUnknown:
                 tg.Send("❓ Perintah tidak dikenal. Ketik /help untuk daftar perintah.")

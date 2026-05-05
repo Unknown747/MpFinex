@@ -357,6 +357,7 @@ Finex CLI bisa dikontrol dari mana saja via Telegram. Aktifkan dengan mengisi `T
 | `/stopbot <nama>` | Hentikan bot berdasarkan nama |
 | `/trades` | Posisi terbuka saat ini + unrealized P&L |
 | `/balance` | Saldo & equity akun saat ini |
+| `/optimize <SYMBOL>` | Jalankan Genetic Algorithm optimizer dari HP — hasil 4 strategi dikirim otomatis ke chat |
 
 ### Notifikasi Otomatis
 
