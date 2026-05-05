@@ -1,183 +1,351 @@
 # Finex CLI — MT5 Trading Bot
 
-Terminal UI (TUI) trading bot for MetaTrader 5, designed for **FinexBisnisSolusi** broker. Built with Go + Bubble Tea.
+Terminal UI trading bot untuk MetaTrader 5, dirancang khusus untuk broker **FinexBisnisSolusi**. Dibangun dengan Go + Bubble Tea.
 
-![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go) ![MT5](https://img.shields.io/badge/MT5-Demo%2FLive-orange) ![License](https://img.shields.io/badge/license-MIT-blue)
-
----
-
-## Features
-
-- **Live indicator dashboard** — RSI(7) gauge bar, Bollinger %B position, composite signal per pair (LONG ↑ / SHORT ↓ / WAIT –), updated every second
-- **4 real trading strategies** — Scalping (RSI 7), Swing (Bollinger Bands), Trend Following (EMA crossover), Mean Reversion (RSI + BB)
-- **8 forex pairs** — EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, EURGBP, EURJPY
-- **Multi-bot management** — create, edit, start/stop, delete bots via TUI; config persisted to `bots.json`
-- **MT5 connection** — TLS + SRP-6a authentication to MetaQuotes trade server binary protocol
-- **Structured logging** — all trades, bot events, and MT5 errors written to `finex-bot.log`
-
-### H. Smart Position Sizing — Correlation-Aware (NEW)
-
-File: `internal/risk/correlation.go`
-
-Static 15-minute correlation matrix for all 8 pairs:
-
-| Pair 1 | Pair 2 | Correlation |
-|---|---|---|
-| EURUSD | GBPUSD | +0.85 (high) |
-| EURUSD | USDCHF | −0.92 (inverse) |
-| USDJPY | EURJPY | +0.78 |
-| EURUSD | EURJPY | +0.72 |
-| GBPUSD | EURGBP | −0.75 |
-| USDJPY | USDCHF | +0.70 |
-
-Rules enforced before each trade entry:
-
-1. **Correlation ≥ 0.7 → reduce total risk 30%** when adding a same-direction position in a highly correlated pair.
-2. **Block conflicting positions**: opening BUY EURUSD while GBPUSD is also BUY when corr = +0.85 is allowed (same direction, reduced risk), but opening SELL EURUSD alongside BUY GBPUSD is blocked outright.
-3. **Total correlated exposure ≤ 5% of equity** — if the combined risk % of highly-correlated open positions exceeds this cap, no new position is opened.
-
-### I. Automatic Market Regime Detection (NEW)
-
-File: `internal/market/regime.go`
-
-Regimes are detected per-symbol using ADX, EMA slope, Bollinger Band width, and ATR. Cache TTL is 1 hour; forced refresh runs hourly.
-
-| Regime | Detection Criteria | Strategy Weights |
-|---|---|---|
-| **TRENDING** | ADX > 25 + EMA slope ≠ 0 | Trend Following + Swing = 70% |
-| **RANGING** | ADX < 20 + BB width < 1% | Mean Reversion + Scalping = 70% |
-| **VOLATILE** | ATR(14) > 1.5× mean ATR(50) | All strategies at 50% (risk halved) |
-
-ADX indicator added to `internal/indicator/indicator.go` using Wilder's smoothing.
-
-### J. Performance Metrics Dashboard — Tab 6 (NEW)
-
-New tab accessible via `6` or `Tab` key in the TUI.
-
-Real-time metrics updated every 30 seconds:
-
-- **Win Rate** — aggregate across all bots
-- **Profit Factor** — sum of winning P&L / |sum of losing P&L|
-- **Sharpe Ratio** — simplified per-trade Sharpe (mean / std × √n)
-- **Max Drawdown** — peak-to-trough percentage from cumulative P&L curve
-- **Top Pairs** — sorted by total realised P&L
-- **Best Strategy** — sorted by profit factor per strategy
-- **Risk Meter** — current drawdown vs maximum allowed; turns red if drawdown > 70% of limit
+![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go)
+![MT5](https://img.shields.io/badge/MT5-Demo%2FLive-orange)
+![Tests](https://img.shields.io/badge/tests-57%20passing-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
 ---
 
-## Quick Start
+## Fitur Utama
 
-### Prerequisites
+| # | Fitur | Keterangan |
+|---|---|---|
+| A | Live indicator dashboard | RSI gauge, Bollinger %B, sinyal komposit per pasang, update setiap detik |
+| B | 4 strategi trading | Scalping, Swing, Trend Following, Mean Reversion |
+| C | 8 pasang forex | EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, EURGBP, EURJPY |
+| D | Multi-bot management | Buat, edit, start/stop, hapus bot lewat TUI; config disimpan di `bots.json` |
+| E | Koneksi MT5 | TLS + SRP-6a authentication ke server MetaQuotes |
+| F | Structured logging | Semua trade, event bot, dan error MT5 dicatat ke `finex-bot.log` |
+| G | Risk management | Daily loss limit, max drawdown, dynamic lot sizing, cooldown |
+| H | Correlation-aware sizing | Posisi berkorelasi tinggi otomatis dikurangi risikonya 30% |
+| I | Market Regime Detection | ADX + ATR + BB mendeteksi Trending / Ranging / Volatile |
+| J | Performance Dashboard | Win rate, Profit Factor, Sharpe Ratio, Max Drawdown (Tab 6) |
 
-- Go 1.21+
-- MetaTrader 5 account (demo or live) from [Finex](https://finexindo.co.id)
+---
 
-### Run
+## Instalasi
+
+### Prasyarat
+
+- **Go 1.21+** — [download](https://go.dev/dl/)
+- **Akun MetaTrader 5** (demo atau live) dari [Finex](https://finexindo.co.id)
+- Terminal dengan dukungan warna 256-bit (iTerm2, Windows Terminal, GNOME Terminal, dll.)
+
+### Clone & Build
 
 ```bash
 git clone https://github.com/your-username/finex-cli.git
 cd finex-cli
-cp .env.example .env          # fill in your MT5 credentials
+
+# Salin template environment variable
+cp .env.example .env
+
+# Edit .env dengan kredensial MT5 kamu
+nano .env
+
+# Build
 go build -o finex-bot .
+
+# Jalankan
 ./finex-bot
 ```
 
-### Environment Variables
+### Build tanpa clone (Go install)
 
-| Variable | Description | Example |
+```bash
+go install github.com/your-username/finex-cli@latest
+finex-cli
+```
+
+---
+
+## Konfigurasi Environment Variable
+
+Buat file `.env` di root project (sudah ada contohnya di `.env.example`):
+
+```bash
+cp .env.example .env
+```
+
+Lalu isi dengan data akun MT5 kamu:
+
+```env
+# Nama broker / company
+FINEX_COMPANY=FinexBisnisSolusi
+
+# Nomor login MT5 (account number)
+FINEX_LOGIN=61369797
+
+# Nama server MT5
+FINEX_SERVER=FinexBisnisSolusi-Demo
+
+# Host dan port server MT5
+FINEX_HOST=prod-mt5-demo1.fnx.xmt.mx:443
+
+# Password akun MT5 — JANGAN di-commit ke git!
+FINEX_PASSWORD=rahasia123
+```
+
+| Variable | Wajib | Keterangan |
 |---|---|---|
-| `FINEX_LOGIN` | MT5 account number | `61369797` |
-| `FINEX_PASSWORD` | MT5 account password | *(secret)* |
-| `FINEX_SERVER` | MT5 server name | `FinexBisnisSolusi-Demo` |
-| `FINEX_HOST` | MT5 server host:port | `prod-mt5-demo1.fnx.xmt.mx:443` |
-| `FINEX_COMPANY` | Broker company name | `FinexBisnisSolusi` |
+| `FINEX_LOGIN` | Ya | Nomor akun MT5 (angka) |
+| `FINEX_PASSWORD` | Ya | Password akun MT5 |
+| `FINEX_SERVER` | Ya | Nama server MT5 (lihat di platform) |
+| `FINEX_HOST` | Ya | `hostname:port` server MT5 |
+| `FINEX_COMPANY` | Ya | Nama company broker (untuk verifikasi koneksi) |
 
-> **Never commit your `.env` file.** It is already listed in `.gitignore`.
+> **Penting:** File `.env` sudah masuk `.gitignore`. Jangan pernah meng-commit file ini ke repositori publik.
+
+### Beralih ke Akun Live
+
+```env
+FINEX_LOGIN=<nomor_akun_live>
+FINEX_PASSWORD=<password_live>
+FINEX_SERVER=FinexBisnisSolusi-Live
+FINEX_HOST=<host_live>:443
+```
+
+Atau gunakan tombol `r` di dalam TUI pada tab **Settings** untuk toggle Demo ↔ Real.
+
+> **Catatan:** Eksekusi order live belum diimplementasikan. Bot saat ini autentikasi ke MT5 dan menjalankan strategi dalam mode simulasi. Eksekusi order live direncanakan untuk rilis berikutnya.
 
 ---
 
-## Keyboard Shortcuts
+## Cara Penggunaan TUI
 
-| Key | Action |
+Setelah menjalankan `./finex-bot`, kamu akan melihat antarmuka berikut:
+
+```
+ FINEX BOT  Demo  EURUSD ▼ 1.08417           Floating P&L: +0.00
+─────────────────────────────────────────────────────────────────
+ [1] DASHBOARD  [2] MARKETS  [3] BOTS  [4] TRADES  [5] SETTINGS  [6] METRICS
+═════════════════════════════════════════════════════════════════
+ ...konten tab...
+─────────────────────────────────────────────────────────────────
+  1-6  Jump   Tab  Next   ⇧Tab  Prev   q  Quit
+```
+
+### Navigasi
+
+| Tombol | Aksi |
 |---|---|
-| `Tab` / `1`–`6` | Switch tabs |
-| `s` | Start / stop selected bot |
-| `n` | New bot |
-| `e` | Edit selected bot |
-| `d` | Delete selected bot |
-| `↑` / `↓` | Navigate list |
-| `q` / `Ctrl+C` | Quit |
+| `1` – `6` | Pindah langsung ke tab |
+| `Tab` | Tab berikutnya |
+| `Shift+Tab` | Tab sebelumnya |
+| `↑` / `↓` | Pilih item dalam daftar |
+| `q` atau `Ctrl+C` | Keluar |
+
+### Manajemen Bot (Tab 3 — Bots)
+
+| Tombol | Aksi |
+|---|---|
+| `n` | Buat bot baru |
+| `e` | Edit bot yang dipilih |
+| `d` | Hapus bot yang dipilih |
+| `s` | Start / Stop bot yang dipilih |
+| `↑` / `↓` | Pilih bot |
+
+### Membuat Bot Baru
+
+1. Tekan `3` untuk buka tab **Bots**
+2. Tekan `n` → form pembuatan bot muncul
+3. Isi:
+   - **Name** — nama bot (bebas)
+   - **Symbol** — pilih dari 8 pasang yang tersedia
+   - **Strategy** — Scalping / Swing / Trend / Mean Reversion
+   - **Risk %** — persentase risiko per trade (misal: `1.5`)
+   - **Stop Loss (pips)** — jarak stop loss dalam pips
+   - **Take Profit (pips)** — jarak take profit dalam pips
+   - **Max Daily Loss %** — batas kerugian harian
+   - **Max Drawdown %** — batas drawdown dari peak equity
+4. Tekan `Enter` untuk simpan, `Esc` untuk batal
+5. Kembali ke tab Bots → pilih bot → tekan `s` untuk start
 
 ---
 
-## Project Structure
+## Penjelasan Tab
 
-```
-finex-cli/
-├── main.go                        # TUI entry point (Bubble Tea model + views)
-├── internal/
-│   ├── account/account.go         # Account types (Demo / Real)
-│   ├── bot/bot.go                 # Bot logic, trade lifecycle, default bots
-│   ├── bot/risk.go                # RiskLimits, RiskProfile, dynamic lot sizing
-│   ├── config/config.go           # Persist bot config to bots.json
-│   ├── indicator/indicator.go     # RSI, EMA, SMA, Bollinger Bands, ATR, ADX, signals
-│   ├── logger/logger.go           # Structured file logger (finex-bot.log)
-│   ├── market/market.go           # Simulated forex market + candle history
-│   ├── market/regime.go           # [NEW] Market regime detection (ADX/ATR/BB)
-│   ├── risk/correlation.go        # [NEW] Correlation-aware position sizing
-│   └── mt5/
-│       ├── client.go              # MT5 TLS connection + SRP-6a auth
-│       ├── account.go             # Binary account info parser
-│       ├── proto.go               # MT5 binary packet encoding/decoding
-│       └── srp6a.go               # SRP-6a (RFC 5054 Group 14 / SHA-256)
-├── scripts/
-│   └── post-merge.sh              # Post-merge build hook
-├── .env.example                   # Environment variable template
-└── .gitignore
-```
+### [1] Dashboard
+- **4 KPI tiles**: Balance, Equity, Session P&L, Win Rate + jumlah bot aktif
+- **Tabel bot ringkas**: status, simbol, strategi, P&L, win rate per bot
+- **Market Prices**: harga live 8 pasang dalam 2 kolom + arah (▲/▼) dan perubahan %
+- **Recent Trades**: 5 trade terakhir lintas semua bot
+
+### [2] Markets
+- Sinyal komposit per pasang: LONG ↑ / SHORT ↓ / WAIT –
+- RSI(7) gauge bar visual
+- Bollinger %B posisi
+- Spread dan ATR(14)
+
+### [3] Bots
+- Tabel semua bot (1 baris per bot)
+- Detail card bot yang dipilih: strategi, risk, TP/SL, drawdown, trade aktif
+
+### [4] Trades
+- Riwayat semua trade yang ditutup
+- Filter per bot / simbol (coming soon)
+
+### [5] Settings
+- Toggle Demo / Real (tombol `r`)
+- Status koneksi MT5
+
+### [6] Metrics (Performance Dashboard)
+- Win Rate agregat
+- Profit Factor
+- Sharpe Ratio (simplified)
+- Max Drawdown %
+- Top pasang berdasarkan P&L
+- Strategi terbaik berdasarkan profit factor
+- Risk Meter: drawdown saat ini vs batas maksimal
 
 ---
 
-## Trading Strategies
+## Strategi Trading
 
-| Strategy | Indicator | Entry | Exit |
-|---|---|---|---|
-| **Scalping** | RSI(7) | RSI < 38 → BUY, RSI > 62 → SELL | TP 1.5% / SL 0.8% |
-| **Swing Trading** | Bollinger Bands(20, 2σ) | Price ≤ lower → BUY, ≥ upper → SELL | TP 3.0% / SL 1.5% |
-| **Trend Following** | EMA(9) × EMA(21) | Golden cross → BUY, death cross → SELL | TP 3.0% / SL 1.5% + reversal exit |
-| **Mean Reversion** | RSI(14) + BB(20, 1.5σ) | RSI < 35 or price ≤ lower → BUY | TP 2.0% / SL 1.0% |
+| Strategi | Indikator | Entry BUY | Entry SELL | TP / SL |
+|---|---|---|---|---|
+| **Scalping** | RSI(7) | RSI < 38 | RSI > 62 | 1.5% / 0.8% |
+| **Swing** | BB(20, 2σ) | Price ≤ lower band | Price ≥ upper band | 3.0% / 1.5% |
+| **Trend Following** | EMA(9) × EMA(21) | Golden cross | Death cross | 3.0% / 1.5% |
+| **Mean Reversion** | RSI(14) + BB(20, 1.5σ) | RSI < 35 atau price ≤ lower | RSI > 65 atau price ≥ upper | 2.0% / 1.0% |
+
+Semua strategi menggunakan konfirmasi **Smart Money Concepts (SMC)**:
+- **Order Block** — candle bullish diikuti bearish (demand zone untuk BUY)
+- **Fair Value Gap (FVG)** — gap imbalance antar 3 candle berurutan (+30% bobot sinyal)
 
 ---
 
 ## Risk Management
 
-| Feature | Details |
+### Dynamic Lot Sizing
+```
+lot = (equity × risk%) / (SL_pips × pip_value)
+```
+Dibulatkan ke kelipatan lot step (0.01), minimum `MinLot`.
+
+### Dynamic Risk Profile (Rolling 20 Trade)
+| Win Rate | Risk per Trade |
 |---|---|
-| Daily loss limit | Bot stops when daily loss % exceeds threshold |
-| Max drawdown | Bot stops when trailing drawdown exceeds threshold |
-| Dynamic lot sizing | Wilder ATR-based SL/TP + Kelly-inspired lot calc |
-| Correlation filter | Blocks conflicting positions; reduces risk 30% on same-dir correlated pairs |
-| Regime detection | Halves risk in volatile markets; weights strategies by regime |
-| Consecutive loss cooldown | 1-hour trading halt after 5 consecutive losses |
+| > 60% | 2.0% |
+| 40–60% | 1.5% (default) |
+| < 40% | 1.0% |
+
+- **3 consecutive losses** → risk dipotong 50% untuk trade berikutnya
+- **5 consecutive losses** → cooldown 1 jam (trading halt)
+
+### Correlation-Aware Sizing
+| Kondisi | Tindakan |
+|---|---|
+| Korelasi ≥ 0.7, posisi searah | Risk dikurangi 30% |
+| Korelasi ≥ 0.7, posisi berlawanan | Entry diblokir |
+| Total exposed correlated risk > 5% equity | Entry diblokir |
+
+### Market Regime Detection
+| Regime | Kriteria | Pengaruh |
+|---|---|---|
+| **TRENDING** | ADX > 25 + slope EMA ≠ 0 | Trend + Swing strategies diprioritaskan |
+| **RANGING** | ADX < 20 + BB width < 1% | Mean Reversion + Scalping diprioritaskan |
+| **VOLATILE** | ATR(14) > 1.5× mean ATR(50) | Risk semua strategi dikurangi 50% |
 
 ---
 
-## Real Trading Setup
+## Struktur Proyek
 
-To switch from demo to live trading, update these environment variables:
-
-```bash
-FINEX_LOGIN=<your_live_account_number>
-FINEX_PASSWORD=<your_live_password>
-FINEX_SERVER=FinexBisnisSolusi-Live
-FINEX_HOST=<live_server_host>:443   # ask Finex support
+```
+finex-cli/
+├── main.go                          # TUI entry point (Bubble Tea model + semua view)
+├── .env.example                     # Template environment variable
+├── .gitignore
+├── LICENSE
+├── go.mod / go.sum
+└── internal/
+    ├── account/
+    │   └── account.go               # Tipe akun Demo / Real
+    ├── bot/
+    │   ├── bot.go                   # Logika bot, lifecycle trade, default bots
+    │   ├── risk.go                  # RiskLimits, RiskProfile, CalculateLotSize
+    │   └── risk_test.go
+    ├── config/
+    │   └── config.go                # Simpan/load bots.json
+    ├── indicator/
+    │   ├── indicator.go             # RSI, EMA, SMA, Bollinger Bands, ATR, ADX, cache
+    │   └── indicator_test.go
+    ├── journal/
+    │   └── journal.go               # Trade journal (JSONL)
+    ├── logger/
+    │   └── logger.go                # Structured file logger
+    ├── market/
+    │   ├── market.go                # Simulasi forex market + candle history
+    │   ├── market_test.go
+    │   ├── regime.go                # Market regime detection
+    │   └── regime_test.go
+    ├── mt5/
+    │   ├── client.go                # TLS connection + SRP-6a auth + heartbeat
+    │   ├── account.go               # Binary account info parser
+    │   ├── proto.go                 # MT5 binary packet encoding/decoding
+    │   └── srp6a.go                 # SRP-6a (RFC 5054, Group 14 / SHA-256)
+    ├── optimizer/
+    │   └── optimizer.go             # Grid-search parameter optimizer
+    ├── risk/
+    │   ├── correlation.go           # Correlation matrix + exposure cap
+    │   └── correlation_test.go
+    ├── strategy/
+    │   ├── smart_money.go           # Order Block + FVG detection
+    │   └── smart_money_test.go
+    └── utils/
+        ├── news.go                  # High-impact news blackout (FOMC, NFP, CPI)
+        └── news_test.go
 ```
 
-> **Note:** Real order placement is not yet implemented. The bot currently authenticates to MT5 and runs strategies in simulation mode. Live order execution is planned for a future release.
+---
+
+## Menjalankan Test
+
+```bash
+# Semua paket
+go test ./internal/... -v
+
+# Satu paket saja
+go test ./internal/risk/... -v
+
+# Dengan coverage
+go test ./internal/... -cover
+```
+
+Output yang diharapkan: **57 tests, semua PASS**.
 
 ---
 
-## License
+## Troubleshooting
 
-MIT — see [LICENSE](LICENSE) for details.
+| Masalah | Solusi |
+|---|---|
+| `Loading Finex Trading Bot...` terus-menerus | Perkecil terminal atau tunggu inisialisasi selesai |
+| Koneksi MT5 gagal | Periksa `FINEX_HOST`, `FINEX_LOGIN`, `FINEX_PASSWORD` di `.env` |
+| TUI berantakan / tidak aligned | Pastikan terminal width minimal 80 kolom |
+| Bot tidak bisa start | Cek log di `finex-bot.log` untuk detail error |
+| `bots.json` tidak tersimpan | Pastikan direktori project memiliki permission write |
+
+---
+
+## Kontribusi
+
+1. Fork repositori ini
+2. Buat branch baru: `git checkout -b fitur/nama-fitur`
+3. Commit perubahan: `git commit -m "feat: tambah fitur X"`
+4. Push ke branch: `git push origin fitur/nama-fitur`
+5. Buka Pull Request
+
+Pastikan semua test lulus sebelum membuka PR:
+```bash
+go test ./internal/... && go vet ./...
+```
+
+---
+
+## Lisensi
+
+MIT — lihat [LICENSE](LICENSE) untuk detail lengkap.
