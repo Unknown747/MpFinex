@@ -109,82 +109,124 @@ const (
         ViewConfirmSwitch
 )
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
+// ─── Styles ─────────────────────────────────────────────────────────────────────────────
 
 var (
-        colorBg      = lipgloss.Color("#0d1117")
-        colorSurface = lipgloss.Color("#161b22")
-        colorBorder  = lipgloss.Color("#30363d")
-        colorPrimary = lipgloss.Color("#58a6ff")
-        colorGreen   = lipgloss.Color("#3fb950")
-        colorRed     = lipgloss.Color("#f85149")
-        colorYellow  = lipgloss.Color("#d29922")
-        colorMuted   = lipgloss.Color("#8b949e")
-        colorWhite   = lipgloss.Color("#e6edf3")
-        colorOrange  = lipgloss.Color("#f0883e")
+	// Palette — deep navy terminal trading theme
+	colorBg       = lipgloss.Color("#080d14")
+	colorSurface  = lipgloss.Color("#0d1421")
+	colorSurface2 = lipgloss.Color("#111c2d")
+	colorBorder   = lipgloss.Color("#1e3a5c")
+	colorPrimary  = lipgloss.Color("#38bdf8")
+	colorGreen    = lipgloss.Color("#22c55e")
+	colorRed      = lipgloss.Color("#f43f5e")
+	colorYellow   = lipgloss.Color("#eab308")
+	colorMuted    = lipgloss.Color("#475569")
+	colorWhite    = lipgloss.Color("#f1f5f9")
+	colorOrange   = lipgloss.Color("#fb923c")
+	colorViolet   = lipgloss.Color("#a78bfa")
+	colorDim      = lipgloss.Color("#1e293b")
 
-        baseStyle = lipgloss.NewStyle().
-                        Background(colorBg).
-                        Foreground(colorWhite)
+	baseStyle = lipgloss.NewStyle().
+			Background(colorBg).
+			Foreground(colorWhite)
 
-        headerStyle = lipgloss.NewStyle().
-                        Background(colorSurface).
-                        Foreground(colorPrimary).
-                        Bold(true).
-                        Padding(0, 2)
+	headerStyle = lipgloss.NewStyle().
+			Background(colorSurface).
+			Foreground(colorPrimary).
+			Bold(true).
+			Padding(0, 2)
 
-        tabActiveStyle = lipgloss.NewStyle().
-                        Background(colorPrimary).
-                        Foreground(colorBg).
-                        Bold(true).
-                        Padding(0, 2)
+	tabActiveStyle = lipgloss.NewStyle().
+			Background(colorPrimary).
+			Foreground(colorBg).
+			Bold(true).
+			Padding(0, 2)
 
-        tabInactiveStyle = lipgloss.NewStyle().
-                                Background(colorSurface).
-                                Foreground(colorMuted).
-                                Padding(0, 2)
+	tabInactiveStyle = lipgloss.NewStyle().
+				Background(colorSurface).
+				Foreground(colorMuted).
+				Padding(0, 2)
 
-        demoTagStyle = lipgloss.NewStyle().
-                        Background(colorYellow).
-                        Foreground(colorBg).
-                        Bold(true).
-                        Padding(0, 1)
+	demoTagStyle = lipgloss.NewStyle().
+			Background(colorYellow).
+			Foreground(colorBg).
+			Bold(true).
+			Padding(0, 1)
 
-        realTagStyle = lipgloss.NewStyle().
-                        Background(colorGreen).
-                        Foreground(colorBg).
-                        Bold(true).
-                        Padding(0, 1)
+	realTagStyle = lipgloss.NewStyle().
+			Background(colorGreen).
+			Foreground(colorBg).
+			Bold(true).
+			Padding(0, 1)
 
-        cardStyle = lipgloss.NewStyle().
-                        Border(lipgloss.RoundedBorder()).
-                        BorderForeground(colorBorder).
-                        Background(colorSurface).
-                        Padding(1, 2)
+	cardStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(colorBorder).
+			Background(colorSurface).
+			Padding(0, 2)
 
-        titleStyle = lipgloss.NewStyle().
-                        Foreground(colorPrimary).
-                        Bold(true)
+	cardHiStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(colorPrimary).
+			Background(colorSurface2).
+			Padding(0, 2)
 
-        mutedStyle = lipgloss.NewStyle().Foreground(colorMuted)
-        greenStyle = lipgloss.NewStyle().Foreground(colorGreen).Bold(true)
-        redStyle   = lipgloss.NewStyle().Foreground(colorRed).Bold(true)
-        yellowStyle = lipgloss.NewStyle().Foreground(colorYellow)
+	titleStyle  = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+	mutedStyle  = lipgloss.NewStyle().Foreground(colorMuted)
+	dimStyle    = lipgloss.NewStyle().Foreground(colorDim)
+	greenStyle  = lipgloss.NewStyle().Foreground(colorGreen).Bold(true)
+	redStyle    = lipgloss.NewStyle().Foreground(colorRed).Bold(true)
+	yellowStyle = lipgloss.NewStyle().Foreground(colorYellow)
+	violetStyle = lipgloss.NewStyle().Foreground(colorViolet)
 
-        inputStyle = lipgloss.NewStyle().
-                        Border(lipgloss.RoundedBorder()).
-                        BorderForeground(colorBorder).
-                        Padding(0, 1)
+	inputStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(colorBorder).
+			Padding(0, 1)
 
-        focusedInputStyle = lipgloss.NewStyle().
-                                Border(lipgloss.RoundedBorder()).
-                                BorderForeground(colorPrimary).
-                                Padding(0, 1)
+	focusedInputStyle = lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder()).
+				BorderForeground(colorPrimary).
+				Padding(0, 1)
 
-        helpStyle = lipgloss.NewStyle().
-                        Foreground(colorMuted).
-                        Italic(true)
+	helpStyle = lipgloss.NewStyle().
+			Foreground(colorMuted)
 )
+
+// winBar renders a horizontal progress bar for win rate (0-100).
+func winBar(pct float64, width int) string {
+	if width < 2 {
+		width = 2
+	}
+	filled := int(pct / 100.0 * float64(width))
+	if filled > width {
+		filled = width
+	}
+	var col lipgloss.Color
+	switch {
+	case pct >= 55:
+		col = colorGreen
+	case pct >= 40:
+		col = colorYellow
+	default:
+		col = colorRed
+	}
+	bar := lipgloss.NewStyle().Foreground(col).Render(strings.Repeat("█", filled)) +
+		lipgloss.NewStyle().Foreground(colorDim).Render(strings.Repeat("░", width-filled))
+	return bar
+}
+
+// keyHint returns a styled [KEY] label + description string for the help bar.
+func keyHint(key, desc string) string {
+	k := lipgloss.NewStyle().
+		Foreground(colorBg).
+		Background(lipgloss.Color("#64748b")).
+		Bold(true).
+		Padding(0, 1).
+		Render(key)
+	return k + " " + mutedStyle.Render(desc)
+}
 
 func pnlStyle(v float64) lipgloss.Style {
         if v > 0 {
@@ -699,221 +741,219 @@ func (m Model) View() string {
 }
 
 func (m Model) renderHeader() string {
-        acc := m.currentAccount()
-        modeTag := demoTagStyle.Render(" DEMO ")
-        if m.useReal {
-                modeTag = realTagStyle.Render(" REAL ")
-        }
+	acc := m.currentAccount()
 
-        var connBadge string
-        switch m.mt5Status {
-        case mt5.StatusConnected:
-                connBadge = lipgloss.NewStyle().
-                        Background(colorGreen).Foreground(colorBg).Bold(true).Padding(0, 1).
-                        Render(" MT5 ✓ ")
-        case mt5.StatusConnecting, mt5.StatusHandshake, mt5.StatusAuthenticating:
-                connBadge = lipgloss.NewStyle().
-                        Background(colorYellow).Foreground(colorBg).Bold(true).Padding(0, 1).
-                        Render(" MT5 … ")
-        case mt5.StatusFailed:
-                if !m.mt5NextRetry.IsZero() {
-                        secs := int(time.Until(m.mt5NextRetry).Seconds())
-                        if secs < 0 {
-                                secs = 0
-                        }
-                        connBadge = lipgloss.NewStyle().
-                                Background(colorRed).Foreground(colorBg).Bold(true).Padding(0, 1).
-                                Render(fmt.Sprintf(" MT5 ↻%ds ", secs))
-                } else {
-                        connBadge = lipgloss.NewStyle().
-                                Background(colorRed).Foreground(colorBg).Bold(true).Padding(0, 1).
-                                Render(" MT5 ✗ ")
-                }
-        default:
-                connBadge = lipgloss.NewStyle().
-                        Background(colorMuted).Foreground(colorBg).Padding(0, 1).
-                        Render(" MT5 ")
-        }
+	modeTag := demoTagStyle.Render(" DEMO ")
+	if m.useReal {
+		modeTag = realTagStyle.Render(" LIVE ")
+	}
 
-        title := lipgloss.NewStyle().
-                Foreground(colorPrimary).
-                Bold(true).
-                Render("⬡ FINEX TRADING BOT")
+	var connBadge string
+	switch m.mt5Status {
+	case mt5.StatusConnected:
+		connBadge = lipgloss.NewStyle().
+			Background(colorGreen).Foreground(colorBg).Bold(true).Padding(0, 1).
+			Render(" MT5 ✓ ")
+	case mt5.StatusConnecting, mt5.StatusHandshake, mt5.StatusAuthenticating:
+		connBadge = lipgloss.NewStyle().
+			Background(colorYellow).Foreground(colorBg).Bold(true).Padding(0, 1).
+			Render(" MT5 … ")
+	case mt5.StatusFailed:
+		if !m.mt5NextRetry.IsZero() {
+			secs := int(time.Until(m.mt5NextRetry).Seconds())
+			if secs < 0 {
+				secs = 0
+			}
+			connBadge = lipgloss.NewStyle().
+				Background(colorRed).Foreground(colorBg).Bold(true).Padding(0, 1).
+				Render(fmt.Sprintf(" MT5 ↻%ds ", secs))
+		} else {
+			connBadge = lipgloss.NewStyle().
+				Background(colorRed).Foreground(colorBg).Bold(true).Padding(0, 1).
+				Render(" MT5 ✗ ")
+		}
+	default:
+		connBadge = lipgloss.NewStyle().
+			Background(colorMuted).Foreground(colorBg).Padding(0, 1).
+			Render(" MT5 -- ")
+	}
 
-        balance := lipgloss.NewStyle().
-                Foreground(colorWhite).
-                Render(fmt.Sprintf("Balance: %.2f %s", acc.Balance, acc.Currency))
+	logo := lipgloss.NewStyle().
+		Foreground(colorPrimary).Bold(true).
+		Render("◈ FINEX")
+	ver := mutedStyle.Render(" v1.0")
+	clockStr := lipgloss.NewStyle().
+		Foreground(colorWhite).
+		Render(time.Now().Format("15:04:05"))
+	clockLabel := mutedStyle.Render("  ▶ ")
 
-        equity := lipgloss.NewStyle().
-                Foreground(colorMuted).
-                Render(fmt.Sprintf("Equity: %.2f", acc.Equity))
+	balStr := lipgloss.NewStyle().Foreground(colorWhite).
+		Render(fmt.Sprintf("$%.2f %s", acc.Balance, acc.Currency))
+	eqStr := mutedStyle.Render(fmt.Sprintf("Eq: $%.2f", acc.Equity))
 
-        right := lipgloss.JoinHorizontal(lipgloss.Center,
-                equity, "  ", balance, "  ", modeTag, " ", connBadge,
-        )
+	right := lipgloss.JoinHorizontal(lipgloss.Center,
+		eqStr, "  ", balStr, "  ", modeTag, "  ", connBadge,
+	)
+	center := clockLabel + clockStr
 
-        gap := m.width - lipgloss.Width(title) - lipgloss.Width(right) - 4
-        if gap < 1 {
-                gap = 1
-        }
+	leftW := lipgloss.Width(logo + ver)
+	rightW := lipgloss.Width(right)
+	centerW := lipgloss.Width(center)
+	gapL := (m.width/2 - leftW - centerW/2)
+	if gapL < 1 {
+		gapL = 1
+	}
+	gapR := m.width - leftW - gapL - centerW - rightW - 4
+	if gapR < 1 {
+		gapR = 1
+	}
 
-        return lipgloss.NewStyle().
-                Background(colorSurface).
-                Foreground(colorWhite).
-                Width(m.width).
-                Padding(0, 2).
-                Render(title + strings.Repeat(" ", gap) + right)
+	topBar := lipgloss.NewStyle().
+		Background(colorSurface).
+		Foreground(colorWhite).
+		Width(m.width).
+		Padding(0, 2).
+		Render(logo + ver + strings.Repeat(" ", gapL) + center + strings.Repeat(" ", gapR) + right)
+
+	sepLine := lipgloss.NewStyle().
+		Foreground(colorBorder).
+		Background(colorBg).
+		Render(strings.Repeat("─", m.width))
+
+	return topBar + "\n" + sepLine
 }
 
 func (m Model) renderTabs() string {
-        var tabs []string
-        for i, name := range tabNames {
-                label := fmt.Sprintf(" %d:%s ", i+1, name)
-                if Tab(i) == m.activeTab {
-                        tabs = append(tabs, tabActiveStyle.Render(label))
-                } else {
-                        tabs = append(tabs, tabInactiveStyle.Render(label))
-                }
-        }
-        bar := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
-        return lipgloss.NewStyle().
-                Background(colorSurface).
-                Width(m.width).
-                Render(bar)
+	icons := []string{"◈", "▲", "⬡", "≡", "◎"}
+	var tabs []string
+	for i, name := range tabNames {
+		label := fmt.Sprintf(" %s %d:%s ", icons[i], i+1, strings.ToUpper(name))
+		if Tab(i) == m.activeTab {
+			tabs = append(tabs, tabActiveStyle.Render(label))
+		} else {
+			tabs = append(tabs, tabInactiveStyle.Render(label))
+		}
+	}
+	bar := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
+	return lipgloss.NewStyle().
+		Background(colorSurface).
+		Width(m.width).
+		Render(bar)
 }
 
-// ─── Dashboard ────────────────────────────────────────────────────────────────
-
 func (m Model) renderDashboard() string {
-        acc := m.currentAccount()
+	acc := m.currentAccount()
 
-        totalPnL := 0.0
-        totalTrades := 0
-        wins := 0
-        activeBots := 0
-        openTrades := 0
+	totalPnL := 0.0
+	totalTrades := 0
+	wins := 0
+	activeBots := 0
+	openTrades := 0
 
-        for _, b := range m.bots {
-                totalPnL += b.TotalPnL
-                totalTrades += b.TradeCount()
-                wins += b.WinCount
-                if b.IsRunning {
-                        activeBots++
-                }
-                if b.OpenTrade != nil {
-                        openTrades++
-                }
-        }
+	for _, b := range m.bots {
+		totalPnL += b.TotalPnL
+		totalTrades += b.TradeCount()
+		wins += b.WinCount
+		if b.IsRunning {
+			activeBots++
+		}
+		if b.OpenTrade != nil {
+			openTrades++
+		}
+	}
+	winRate := 0.0
+	if totalTrades > 0 {
+		winRate = float64(wins) / float64(totalTrades) * 100
+	}
 
-        winRate := 0.0
-        if totalTrades > 0 {
-                winRate = float64(wins) / float64(totalTrades) * 100
-        }
+	// ── Stats strip ───────────────────────────────────────────────────────────────
+	sep := mutedStyle.Render("  │  ")
+	bal  := fmt.Sprintf("%s %s", mutedStyle.Render("Balance"), lipgloss.NewStyle().Foreground(colorWhite).Bold(true).Render(fmt.Sprintf("$%.2f", acc.Balance)))
+	eq   := fmt.Sprintf("%s %s", mutedStyle.Render("Equity"), lipgloss.NewStyle().Foreground(colorWhite).Render(fmt.Sprintf("$%.2f", acc.Equity)))
+	pnl  := fmt.Sprintf("%s %s", mutedStyle.Render("P&L"), pnlStyle(totalPnL).Render(fmt.Sprintf("%+.2f", totalPnL)))
+	wr   := fmt.Sprintf("%s %s %s", mutedStyle.Render("WinRate"), winBar(winRate, 8), lipgloss.NewStyle().Foreground(colorGreen).Render(fmt.Sprintf("%.0f%%", winRate)))
+	bots := fmt.Sprintf("%s %s", mutedStyle.Render("Bots"), lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render(fmt.Sprintf("%d/%d", activeBots, len(m.bots))))
+	trd  := fmt.Sprintf("%s %s", mutedStyle.Render("Trades"), mutedStyle.Render(fmt.Sprintf("%d", totalTrades)))
+	open := fmt.Sprintf("%s %s", mutedStyle.Render("Open"), yellowStyle.Render(fmt.Sprintf("%d", openTrades)))
 
-        statCards := []struct {
-                label string
-                value string
-                color lipgloss.Color
-        }{
-                {"Balance", fmt.Sprintf("$%.2f", acc.Balance), colorWhite},
-                {"Equity", fmt.Sprintf("$%.2f", acc.Equity), colorWhite},
-                {"Total P&L", fmt.Sprintf("%+.2f USD", totalPnL), pnlColor(totalPnL)},
-                {"Win Rate", fmt.Sprintf("%.1f%%", winRate), colorGreen},
-                {"Active Bots", fmt.Sprintf("%d / %d", activeBots, len(m.bots)), colorPrimary},
-                {"Open Trades", fmt.Sprintf("%d", openTrades), colorYellow},
-                {"Total Trades", fmt.Sprintf("%d", totalTrades), colorMuted},
-        }
+	statsStrip := cardStyle.Width(m.width-4).Render(
+		lipgloss.JoinHorizontal(lipgloss.Center,
+			bal, sep, eq, sep, pnl, sep, wr, sep, bots, sep, trd, sep, open,
+		),
+	)
 
-        cardW := (m.width - 6) / 4
-        if cardW < 18 {
-                cardW = 18
-        }
+	// ── Bot status table ──────────────────────────────────────────────────────
+	hdrLine := fmt.Sprintf("  %-16s %-8s %-18s %-12s %-10s %s",
+		titleStyle.Render("Bot"),
+		titleStyle.Render("Symbol"),
+		titleStyle.Render("Strategy"),
+		titleStyle.Render("Status"),
+		titleStyle.Render("P&L"),
+		titleStyle.Render("WinRate"),
+	)
+	botLines := []string{hdrLine, mutedStyle.Render("  "+strings.Repeat("─", m.width-12))}
+	for _, b := range m.bots {
+		status := redStyle.Render("● STOPPED")
+		if b.IsRunning {
+			status = greenStyle.Render("● RUNNING")
+		}
+		wrBar := winBar(b.WinRate(), 8)
+		wrPct := fmt.Sprintf("%.0f%%", b.WinRate())
+		line := fmt.Sprintf("  %-18s %-10s %-20s %-14s %-12s %s %s",
+			b.Name, b.Symbol, string(b.Strategy), status,
+			pnlStyle(b.TotalPnL).Render(fmt.Sprintf("%+.2f", b.TotalPnL)),
+			wrBar, mutedStyle.Render(wrPct),
+		)
+		botLines = append(botLines, line)
+	}
+	botSection := cardStyle.Width(m.width-4).Render(strings.Join(botLines, "\n"))
 
-        var row1, row2 []string
-        for i, sc := range statCards {
-                val := lipgloss.NewStyle().Foreground(sc.color).Bold(true).Render(sc.value)
-                lbl := mutedStyle.Render(sc.label)
-                card := cardStyle.Width(cardW).Render(
-                        lipgloss.JoinVertical(lipgloss.Left, lbl, val),
-                )
-                if i < 4 {
-                        row1 = append(row1, card)
-                } else {
-                        row2 = append(row2, card)
-                }
-        }
+	// ── Market snapshot + recent trades ──────────────────────────────────
+	halfW := m.width/2 - 3
+	mktLines := []string{titleStyle.Render("  Market Snapshot")}
+	for _, p := range m.mkt.GetAllPrices()[:4] {
+		dir := greenStyle.Render("▲")
+		pctSt := greenStyle
+		if p.Change < 0 {
+			dir = redStyle.Render("▼")
+			pctSt = redStyle
+		}
+		line := fmt.Sprintf("  %-10s %s %-12.5f %s",
+			p.Symbol, dir, p.Price, pctSt.Render(fmt.Sprintf("%+.2f%%", p.ChangePct)))
+		mktLines = append(mktLines, line)
+	}
+	mktSection := cardStyle.Width(halfW).Render(strings.Join(mktLines, "\n"))
 
-        statsSection := lipgloss.JoinVertical(lipgloss.Left,
-                lipgloss.JoinHorizontal(lipgloss.Top, row1...),
-                " ",
-                lipgloss.JoinHorizontal(lipgloss.Top, row2...),
-        )
+	recentLines := []string{titleStyle.Render("  Recent Trades")}
+	allTrades := []*botpkg.Trade{}
+	for _, b := range m.bots {
+		allTrades = append(allTrades, b.Trades...)
+	}
+	shown := 0
+	for i := len(allTrades) - 1; i >= 0 && shown < 4; i-- {
+		tr := allTrades[i]
+		side := greenStyle.Render("BUY ")
+		if tr.Side == botpkg.Sell {
+			side = redStyle.Render("SELL")
+		}
+		line := fmt.Sprintf("  %-10s %s %-8s %s",
+			tr.Symbol, side, string(tr.Status),
+			pnlStyle(tr.PnL).Render(fmt.Sprintf("%+.2f", tr.PnL)))
+		recentLines = append(recentLines, line)
+		shown++
+	}
+	if shown == 0 {
+		recentLines = append(recentLines, mutedStyle.Render("  No trades yet — start a bot!"))
+	}
+	recentSection := cardStyle.Width(halfW).Render(strings.Join(recentLines, "\n"))
 
-        // Mini bot status list
-        botLines := []string{titleStyle.Render("  Active Bots")}
-        for _, b := range m.bots {
-                status := redStyle.Render("● STOPPED")
-                if b.IsRunning {
-                        status = greenStyle.Render("● RUNNING")
-                }
-                pnl := pnlStyle(b.TotalPnL).Render(fmt.Sprintf("%+.2f USD", b.TotalPnL))
-                line := fmt.Sprintf("  %-16s %-12s %-20s PnL: %s  Win: %.0f%%",
-                        b.Name, b.Symbol, status, pnl, b.WinRate())
-                botLines = append(botLines, line)
-        }
-        botSection := cardStyle.Width(m.width - 4).Render(
-                strings.Join(botLines, "\n"),
-        )
+	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, mktSection, " ", recentSection)
 
-        // Market snapshot
-        mktLines := []string{titleStyle.Render("  Market Snapshot")}
-        for _, p := range m.mkt.GetAllPrices()[:4] {
-                dir := greenStyle.Render("▲")
-                pctStyle := greenStyle
-                if p.Change < 0 {
-                        dir = redStyle.Render("▼")
-                        pctStyle = redStyle
-                }
-                line := fmt.Sprintf("  %-12s %s %-14.4f %s",
-                        p.Symbol, dir, p.Price, pctStyle.Render(fmt.Sprintf("%+.2f%%", p.ChangePct)))
-                mktLines = append(mktLines, line)
-        }
-        mktSection := cardStyle.Width(m.width/2 - 3).Render(
-                strings.Join(mktLines, "\n"),
-        )
-
-        // Recent trades
-        recentLines := []string{titleStyle.Render("  Recent Trades")}
-        allTrades := []*botpkg.Trade{}
-        for _, b := range m.bots {
-                allTrades = append(allTrades, b.Trades...)
-        }
-        shown := 0
-        for i := len(allTrades) - 1; i >= 0 && shown < 4; i-- {
-                tr := allTrades[i]
-                ps := pnlStyle(tr.PnL)
-                line := fmt.Sprintf("  %-10s %-6s %-8s %s",
-                        tr.Symbol, string(tr.Side), string(tr.Status),
-                        ps.Render(fmt.Sprintf("%+.2f", tr.PnL)))
-                recentLines = append(recentLines, line)
-                shown++
-        }
-        if shown == 0 {
-                recentLines = append(recentLines, mutedStyle.Render("  No trades yet — start a bot!"))
-        }
-        recentSection := cardStyle.Width(m.width/2 - 3).Render(
-                strings.Join(recentLines, "\n"),
-        )
-
-        bottomRow := lipgloss.JoinHorizontal(lipgloss.Top, mktSection, " ", recentSection)
-
-        return lipgloss.NewStyle().Padding(1, 2).Render(
-                lipgloss.JoinVertical(lipgloss.Left,
-                        statsSection, " ",
-                        botSection, " ",
-                        bottomRow,
-                ),
-        )
+	return lipgloss.NewStyle().Padding(1, 2).Render(
+		lipgloss.JoinVertical(lipgloss.Left,
+			statsStrip, " ", botSection, " ", bottomRow,
+		),
+	)
 }
 
 func pnlColor(v float64) lipgloss.Color {
@@ -1172,92 +1212,82 @@ func renderSparkline(candles []market.Candle, width int) string {
 // ─── Bots ─────────────────────────────────────────────────────────────────────
 
 func (m Model) renderBots() string {
-        if len(m.bots) == 0 {
-                empty := cardStyle.Width(m.width - 4).Render(
-                        lipgloss.JoinVertical(lipgloss.Center,
-                                mutedStyle.Render("No bots configured yet."),
-                                "",
-                                yellowStyle.Render("Press [n] to create your first bot"),
-                        ),
-                )
-                return lipgloss.NewStyle().Padding(1, 2).Render(empty)
-        }
+	if len(m.bots) == 0 {
+		empty := cardStyle.Width(m.width - 4).Render(
+			lipgloss.JoinVertical(lipgloss.Center,
+				mutedStyle.Render("No bots configured yet."),
+				"",
+				yellowStyle.Render("Press [n] to create your first bot"),
+			),
+		)
+		return lipgloss.NewStyle().Padding(1, 2).Render(empty)
+	}
 
-        var botCards []string
-        for i, b := range m.bots {
-                selected := i == m.selectedBot
-                statusStr := redStyle.Render("● STOPPED")
-                if b.IsRunning {
-                        statusStr = greenStyle.Render("● RUNNING")
-                }
+	var botCards []string
+	for i, b := range m.bots {
+		selected := i == m.selectedBot
+		statusStr := redStyle.Render("● STOPPED")
+		if b.IsRunning {
+			statusStr = greenStyle.Render("● RUNNING")
+		}
 
-                openStr := mutedStyle.Render("No open trade")
-                if b.OpenTrade != nil {
-                        p := m.mkt.GetPrice(b.OpenTrade.Symbol)
-                        if p != nil {
-                                unrealized := 0.0
-                                if b.OpenTrade.Side == botpkg.Buy {
-                                        unrealized = (p.Price - b.OpenTrade.EntryPrice) * b.OpenTrade.Quantity
-                                } else {
-                                        unrealized = (b.OpenTrade.EntryPrice - p.Price) * b.OpenTrade.Quantity
-                                }
-                                openStr = pnlStyle(unrealized).Render(
-                                        fmt.Sprintf("Open %s @ %.4f | Unrealized: %+.2f USD",
-                                                string(b.OpenTrade.Side), b.OpenTrade.EntryPrice, unrealized),
-                                )
-                        }
-                }
+		openStr := mutedStyle.Render("No open trade")
+		if b.OpenTrade != nil {
+			p := m.mkt.GetPrice(b.OpenTrade.Symbol)
+			if p != nil {
+				unrealized := 0.0
+				if b.OpenTrade.Side == botpkg.Buy {
+					unrealized = (p.Price - b.OpenTrade.EntryPrice) * b.OpenTrade.Quantity
+				} else {
+					unrealized = (b.OpenTrade.EntryPrice - p.Price) * b.OpenTrade.Quantity
+				}
+				openStr = pnlStyle(unrealized).Render(
+					fmt.Sprintf("Open %s @ %.5f  Unrealized: %+.2f USD",
+						string(b.OpenTrade.Side), b.OpenTrade.EntryPrice, unrealized),
+				)
+			}
+		}
 
-                lines := []string{
-                        lipgloss.JoinHorizontal(lipgloss.Center,
-                                titleStyle.Render(b.Name),
-                                "  ",
-                                statusStr,
-                        ),
-                        fmt.Sprintf("%s  │  %s  │  Risk: %.1f%%  │  TP: %.1f%%  │  SL: %.1f%%",
-                                mutedStyle.Render(b.Symbol),
-                                mutedStyle.Render(string(b.Strategy)),
-                                b.RiskPct, b.TakeProfitPct, b.StopLossPct,
-                        ),
-                        fmt.Sprintf("P&L: %s  │  Trades: %d  │  Win Rate: %.1f%%",
-                                pnlStyle(b.TotalPnL).Render(fmt.Sprintf("%+.2f USD", b.TotalPnL)),
-                                b.TradeCount(),
-                                b.WinRate(),
-                        ),
-                        openStr,
-                }
+		wrBar := winBar(b.WinRate(), 10)
+		wrLine := fmt.Sprintf("Win %s %.0f%%  Trades: %d", wrBar, b.WinRate(), b.TradeCount())
 
-                borderColor := colorBorder
-                if selected {
-                        borderColor = colorPrimary
-                }
+		row1 := lipgloss.JoinHorizontal(lipgloss.Center,
+			titleStyle.Render(b.Name), "  ", statusStr,
+		)
+		row2 := fmt.Sprintf("%s  │  %s  │  Risk %.1f%%  │  TP %.1f%%  │  SL %.1f%%",
+			lipgloss.NewStyle().Foreground(colorViolet).Render(b.Symbol),
+			mutedStyle.Render(string(b.Strategy)),
+			b.RiskPct, b.TakeProfitPct, b.StopLossPct,
+		)
+		row3 := fmt.Sprintf("P&L: %s    %s",
+			pnlStyle(b.TotalPnL).Render(fmt.Sprintf("%+.2f USD", b.TotalPnL)),
+			mutedStyle.Render(wrLine),
+		)
 
-                card := lipgloss.NewStyle().
-                        Border(lipgloss.RoundedBorder()).
-                        BorderForeground(borderColor).
-                        Background(colorSurface).
-                        Padding(1, 2).
-                        Width(m.width - 8).
-                        Render(strings.Join(lines, "\n"))
+		st := cardStyle
+		if selected {
+			st = cardHiStyle
+		}
+		card := st.Width(m.width-8).Render(
+			strings.Join([]string{row1, row2, row3, openStr}, "\n"),
+		)
 
-                if selected {
-                        marker := lipgloss.NewStyle().Foreground(colorPrimary).Render("▶ ")
-                        card = lipgloss.JoinHorizontal(lipgloss.Top, marker, card)
-                } else {
-                        card = "  " + card
-                }
-                botCards = append(botCards, card)
-        }
+		if selected {
+			marker := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render("▶ ")
+			card = lipgloss.JoinHorizontal(lipgloss.Top, marker, card)
+		} else {
+			card = "  " + card
+		}
+		botCards = append(botCards, card)
+	}
 
-        content := strings.Join(botCards, "\n")
-        help := mutedStyle.Render("  [j/k] Navigate  [s] Start/Stop  [n] New Bot  [e] Edit  [d] Delete")
+	content := strings.Join(botCards, "\n")
+	help := mutedStyle.Render("  [j/k] Navigate  [s] Start/Stop  [n] New  [e] Edit  [d] Delete")
 
-        return lipgloss.NewStyle().Padding(1, 2).Render(
-                lipgloss.JoinVertical(lipgloss.Left, content, " ", help),
-        )
+	return lipgloss.NewStyle().Padding(1, 2).Render(
+		lipgloss.JoinVertical(lipgloss.Left, content, " ", help),
+	)
 }
-
-// ─── Trades ───────────────────────────────────────────────────────────────────
 
 func (m Model) renderTrades() string {
         allTrades := []*botpkg.Trade{}
@@ -1599,20 +1629,39 @@ func (m Model) renderBotForm() string {
 // ─── Help Bar ─────────────────────────────────────────────────────────────────
 
 func (m Model) renderHelp() string {
-        hints := "[Tab] Next Tab  [1-5] Jump  [q] Quit"
-        if m.activeTab == TabBots {
-                hints = "[j/k] Select  [s] Start/Stop  [n] New  [e] Edit  [d] Delete  [Tab] Next Tab  [q] Quit"
-        } else if m.activeTab == TabSettings {
-                hints = "[r] Switch Demo/Real  [Tab] Next Tab  [q] Quit"
-        }
-        return lipgloss.NewStyle().
-                Background(colorSurface).
-                Foreground(colorMuted).
-                Width(m.width).
-                Padding(0, 2).
-                Render(hints)
+	var hints []string
+	switch m.activeTab {
+	case TabBots:
+		hints = []string{
+			keyHint("j/k", "Select"),
+			keyHint("s", "Start/Stop"),
+			keyHint("n", "New bot"),
+			keyHint("e", "Edit"),
+			keyHint("d", "Delete"),
+			keyHint("Tab", "Next tab"),
+			keyHint("q", "Quit"),
+		}
+	case TabSettings:
+		hints = []string{
+			keyHint("r", "Demo/Real"),
+			keyHint("Tab", "Next tab"),
+			keyHint("q", "Quit"),
+		}
+	default:
+		hints = []string{
+			keyHint("1-5", "Jump tab"),
+			keyHint("Tab", "Next tab"),
+			keyHint("q", "Quit"),
+		}
+	}
+	bar := strings.Join(hints, "  ")
+	return lipgloss.NewStyle().
+		Background(colorSurface).
+		Foreground(colorMuted).
+		Width(m.width).
+		Padding(0, 2).
+		Render(bar)
 }
-
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
