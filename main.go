@@ -513,8 +513,8 @@ func (m Model) updateConfirmSwitch(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // ─── Bot Form ─────────────────────────────────────────────────────────────────
 
 var symbols = []string{
-        "BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT",
-        "SOL/USDT", "ADA/USDT", "DOGE/USDT", "AVAX/USDT",
+        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD",
+        "USDCAD", "USDCHF", "EURGBP", "EURJPY",
 }
 
 func (m *Model) initBotForm() {
@@ -957,9 +957,9 @@ func (m Model) renderMarkets() string {
                 rows = append(rows, row)
         }
 
-        // Mini sparkline chart for BTC
-        chartTitle := titleStyle.Render("\n  BTC/USDT Price Chart (last 20 ticks)")
-        btcHistory := m.mkt.GetHistory("BTC/USDT")
+        // Mini sparkline chart for EURUSD
+        chartTitle := titleStyle.Render("\n  EURUSD Price Chart (last 20 ticks)")
+        btcHistory := m.mkt.GetHistory("EURUSD")
         chart := renderSparkline(btcHistory, m.width-8)
 
         table := cardStyle.Width(m.width - 4).Render(
