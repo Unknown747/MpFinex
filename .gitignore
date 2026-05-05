@@ -25,6 +25,9 @@ tmp/
 *.log
 finex-bot.log
 
+# Bot config (per-user, jangan di-commit)
+bots.json
+
 # IDE
 .idea/
 .vscode/

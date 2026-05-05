@@ -13,6 +13,7 @@ import (
 
         "github.com/finex/finex-cli/internal/account"
         botpkg "github.com/finex/finex-cli/internal/bot"
+        "github.com/finex/finex-cli/internal/config"
         "github.com/finex/finex-cli/internal/logger"
         "github.com/finex/finex-cli/internal/market"
         "github.com/finex/finex-cli/internal/mt5"
@@ -243,7 +244,10 @@ func initialModel() Model {
         dm := account.NewDemoAccount()
         rm := account.NewRealAccount()
         mkt := market.NewMarket()
-        bots := botpkg.DefaultBots()
+        bots, _ := config.LoadBots()
+        if len(bots) == 0 {
+                bots = botpkg.DefaultBots()
+        }
         mt5Client := mt5.NewClient(mt5.ConfigFromEnv())
 
         // Open activity log (ignore error — bot runs fine without it).
@@ -480,6 +484,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                                 if m.selectedBot > 0 {
                                         m.selectedBot--
                                 }
+                                _ = config.SaveBots(m.bots)
                         }
                 }
         }
@@ -617,7 +622,7 @@ func (m *Model) saveBotForm() {
                                 b.RiskPct = risk
                                 b.TakeProfitPct = tp
                                 b.StopLossPct = sl
-                                return
+                                break
                         }
                 }
         } else {
@@ -637,6 +642,8 @@ func (m *Model) saveBotForm() {
                         }
                 }
         }
+        // Persist bot list to bots.json after every create/edit
+        _ = config.SaveBots(m.bots)
 }
 
 func parseFloat(s string, def float64) float64 {
