@@ -28,6 +28,11 @@ finex-bot.log
 # Bot config (per-user, jangan di-commit)
 bots.json
 
+# Runtime outputs
+optimized_params.json
+trade_journal.jsonl
+equity_chart.html
+
 # IDE
 .idea/
 .vscode/
