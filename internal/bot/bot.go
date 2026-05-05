@@ -48,6 +48,17 @@ type Trade struct {
         Status     TradeStatus
         OpenedAt   time.Time
         ClosedAt   time.Time
+
+        // ATR-based absolute SL/TP (0 = gunakan % berbasis TakeProfitPct/StopLossPct)
+        SLPrice float64
+        TPPrice float64
+
+        // Trailing stop state
+        BreakevenSet   bool
+        TrailingActive bool
+
+        // true jika order ini adalah paper trade (dry-run mode)
+        IsDryRun bool
 }
 
 // TradeEvent carries all info about a trade open or close.
@@ -75,6 +86,10 @@ type Bot struct {
 
         // Risk management — nil means no limits enforced.
         Risk *RiskLimits
+
+        // DryRun true → order hanya disimulasikan (paper trade), tidak dikirim ke MT5.
+        // Slippage acak ±1 pip diterapkan untuk realisme.
+        DryRun bool
 
         // Optional callbacks fired on trade events (set by main to wire logger).
         OnTradeOpen  func(ev TradeEvent)
@@ -156,7 +171,17 @@ func (b *Bot) Tick(mkt *market.Market, accountBalance float64) {
         closes := mkt.GetCloses(b.Symbol)
         sig := b.getSignal(closes)
         if sig != indicator.None {
-                b.openTrade(price.Price, accountBalance, sig)
+                // Multi-TF confirmation untuk semua strategy kecuali Scalping
+                if b.Strategy != Scalping {
+                        direction := "BUY"
+                        if sig == indicator.Short {
+                                direction = "SELL"
+                        }
+                        if !ConfirmHigherTF(b.Symbol, direction, mkt) {
+                                return // Higher TF tidak align, tunda entry
+                        }
+                }
+                b.openTrade(price.Price, accountBalance, sig, mkt)
         }
 }
 
@@ -176,13 +201,62 @@ func (b *Bot) getSignal(closes []float64) indicator.Signal {
         return indicator.None
 }
 
-func (b *Bot) openTrade(price, balance float64, sig indicator.Signal) {
-        risk := balance * (b.RiskPct / 100)
-        qty := risk / price
-
+func (b *Bot) openTrade(price, balance float64, sig indicator.Signal, mkt *market.Market) {
         side := Buy
         if sig == indicator.Short {
                 side = Sell
+        }
+
+        // Terapkan slippage acak ±1 pip pada paper trade (dry-run mode)
+        entryPrice := price
+        if b.DryRun {
+                symInfo := DefaultSymbolInfo[b.Symbol]
+                pipSize := symInfo.PipSize
+                if pipSize == 0 {
+                        pipSize = 0.0001
+                }
+                slippage := (b.rng.Float64()*2 - 1) * pipSize
+                entryPrice = price + slippage
+        }
+
+        // Hitung ATR-based SL/TP untuk semua strategy kecuali Scalping
+        var slPrice, tpPrice, qty float64
+        if b.Strategy != Scalping {
+                highs, lows := mkt.GetHighLows(b.Symbol)
+                closes := mkt.GetCloses(b.Symbol)
+                atr := indicator.ATR(highs, lows, closes, 14)
+
+                symInfo := DefaultSymbolInfo[b.Symbol]
+                pipSize := symInfo.PipSize
+                if pipSize == 0 {
+                        pipSize = 0.0001
+                }
+
+                if atr > 0 {
+                        slDist := 1.5 * atr
+                        tpDist := 3.0 * atr
+                        if side == Buy {
+                                slPrice = entryPrice - slDist
+                                tpPrice = entryPrice + tpDist
+                        } else {
+                                slPrice = entryPrice + slDist
+                                tpPrice = entryPrice - tpDist
+                        }
+                        // Dynamic lot sizing berbasis ATR stop loss
+                        stopLossPips := slDist / pipSize
+                        qty = CalculateLotSize(balance, b.RiskPct, stopLossPips, symInfo)
+                }
+        }
+
+        // Fallback ke fixed lot sizing jika ATR tidak tersedia (atau Scalping)
+        if qty == 0 {
+                risk := balance * (b.RiskPct / 100)
+                if entryPrice > 0 {
+                        qty = risk / entryPrice
+                }
+                if qty == 0 {
+                        qty = 0.01
+                }
         }
 
         b.tradeCounter++
@@ -192,9 +266,12 @@ func (b *Bot) openTrade(price, balance float64, sig indicator.Signal) {
                 Symbol:     b.Symbol,
                 Side:       side,
                 Quantity:   qty,
-                EntryPrice: price,
+                EntryPrice: entryPrice,
+                SLPrice:    slPrice,
+                TPPrice:    tpPrice,
                 Status:     Open,
                 OpenedAt:   time.Now(),
+                IsDryRun:   b.DryRun,
         }
         b.OpenTrade = trade
 
@@ -204,28 +281,48 @@ func (b *Bot) openTrade(price, balance float64, sig indicator.Signal) {
 }
 
 // checkCloseCondition exits the trade on TP/SL hit.
-// For trend-following strategies, also exits early when the signal reverses
-// (momentum flip). Contrarian strategies (Swing, MeanReversion) hold through
-// noise and only exit at TP/SL — exiting on a reversal signal would defeat
-// the purpose of a counter-trend approach.
+//
+// Priority:
+//  1. Update trailing stop / breakeven setiap tick.
+//  2. Gunakan SLPrice/TPPrice absolut jika sudah di-set (ATR-based).
+//  3. Fallback ke % berbasis TakeProfitPct/StopLossPct (Scalping + ATR data kurang).
+//  4. Secondary exit (TrendFollowing only): potong posisi saat sinyal berbalik.
 func (b *Bot) checkCloseCondition(currentPrice float64, closes []float64) {
         if b.OpenTrade == nil {
                 return
         }
 
-        entry := b.OpenTrade.EntryPrice
-        tp := b.TakeProfitPct / 100
-        sl := b.StopLossPct / 100
+        // Perbarui breakeven / trailing stop setiap tick
+        UpdateTrailingStop(b.OpenTrade, currentPrice, b.Symbol)
 
-        var pnlPct float64
-        if b.OpenTrade.Side == Buy {
-                pnlPct = (currentPrice - entry) / entry
+        entry := b.OpenTrade.EntryPrice
+        pnlPct := pnlPercent(b.OpenTrade.Side, entry, currentPrice)
+
+        // ── SL check: absolut jika SLPrice di-set, kalau tidak pakai % ───────────
+        slHit := false
+        if b.OpenTrade.SLPrice > 0 {
+                if b.OpenTrade.Side == Buy && currentPrice <= b.OpenTrade.SLPrice {
+                        slHit = true
+                } else if b.OpenTrade.Side == Sell && currentPrice >= b.OpenTrade.SLPrice {
+                        slHit = true
+                }
         } else {
-                pnlPct = (entry - currentPrice) / entry
+                slHit = pnlPct <= -(b.StopLossPct / 100)
         }
 
-        // Primary exit: TP or SL
-        if pnlPct >= tp || pnlPct <= -sl {
+        // ── TP check: absolut jika TPPrice di-set, kalau tidak pakai % ───────────
+        tpHit := false
+        if b.OpenTrade.TPPrice > 0 {
+                if b.OpenTrade.Side == Buy && currentPrice >= b.OpenTrade.TPPrice {
+                        tpHit = true
+                } else if b.OpenTrade.Side == Sell && currentPrice <= b.OpenTrade.TPPrice {
+                        tpHit = true
+                }
+        } else {
+                tpHit = pnlPct >= (b.TakeProfitPct / 100)
+        }
+
+        if tpHit || slHit {
                 b.closeTrade(currentPrice, pnlPct)
                 return
         }
@@ -269,6 +366,50 @@ func (b *Bot) closeTrade(exitPrice, pnlPct float64) {
         if b.OnTradeClose != nil {
                 b.OnTradeClose(TradeEvent{Bot: b, Trade: trade})
         }
+}
+
+// ─── Multi-timeframe confirmation ─────────────────────────────────────────────
+
+// ConfirmHigherTF memeriksa apakah trend pada timeframe yang lebih tinggi
+// selaras dengan arah sinyal entry.
+//
+// Implementasi: ambil closes dari setiap 6 candle (≈ H1-equivalent dari M10 candle)
+// lalu bandingkan EMA9 vs EMA21. Jika data tidak cukup, return true (jangan blokir).
+//
+//   symbol          – pasangan forex (e.g. "EURUSD")
+//   signalDirection – "BUY" atau "SELL"
+//   mkt             – data market aktif
+func ConfirmHigherTF(symbol, signalDirection string, mkt *market.Market) bool {
+        htfCloses := mkt.GetHigherTFCloses(symbol, 6)
+        if len(htfCloses) < 22 {
+                return true // data tidak cukup — jangan blokir trade
+        }
+        ema9 := indicator.EMA(htfCloses, 9)
+        ema21 := indicator.EMA(htfCloses, 21)
+        if ema9 == 0 || ema21 == 0 {
+                return true
+        }
+        switch signalDirection {
+        case "BUY":
+                return ema9 > ema21 // H1 trend up
+        case "SELL":
+                return ema9 < ema21 // H1 trend down
+        }
+        return true
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// pnlPercent menghitung P&L sebagai persentase dari harga entry.
+// Positif = profit, negatif = loss.
+func pnlPercent(side TradeSide, entry, current float64) float64 {
+        if entry == 0 {
+                return 0
+        }
+        if side == Buy {
+                return (current - entry) / entry
+        }
+        return (entry - current) / entry
 }
 
 func (b *Bot) StatusLine() string {

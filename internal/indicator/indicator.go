@@ -103,6 +103,51 @@ func BollingerBands(closes []float64, period int, stdMult float64) (mid, upper, 
         return mid, upper, lower
 }
 
+// ─── ATR ─────────────────────────────────────────────────────────────────────
+
+// ATR (Average True Range) menghitung ATR menggunakan Wilder's smoothing.
+// Membutuhkan highs, lows, closes dengan panjang yang sama (minimal period+1 elemen).
+// Returns 0 jika data tidak cukup.
+func ATR(highs, lows, closes []float64, period int) float64 {
+        n := len(closes)
+        if n < period+1 || len(highs) < n || len(lows) < n {
+                return 0
+        }
+
+        // True Range untuk setiap candle mulai dari index 1
+        trs := make([]float64, n-1)
+        for i := 1; i < n; i++ {
+                hl := highs[i] - lows[i]
+                hc := math.Abs(highs[i] - closes[i-1])
+                lc := math.Abs(lows[i] - closes[i-1])
+                tr := hl
+                if hc > tr {
+                        tr = hc
+                }
+                if lc > tr {
+                        tr = lc
+                }
+                trs[i-1] = tr
+        }
+
+        if len(trs) < period {
+                return 0
+        }
+
+        // Seed awal: SMA dari `period` TR pertama
+        atr := 0.0
+        for _, tr := range trs[:period] {
+                atr += tr
+        }
+        atr /= float64(period)
+
+        // Wilder smoothing untuk sisa TR
+        for _, tr := range trs[period:] {
+                atr = (atr*float64(period-1) + tr) / float64(period)
+        }
+        return atr
+}
+
 // ─── Signal type ─────────────────────────────────────────────────────────────
 
 // Signal represents a directional trade signal.

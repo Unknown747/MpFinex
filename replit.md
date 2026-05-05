@@ -65,6 +65,56 @@ Set via Replit Secrets / userenv:
 - Koneksi persisten disimpan di `client.conn` (thread-safe via `sync.Mutex`)
 - Method baru di `mt5.Client`: `Ping() error`, `Disconnect()`
 
+## Profitabilitas & Multi-TF (Bagian 2)
+
+### A. Dynamic Lot Sizing (`internal/bot/risk.go`)
+- Struct `SymbolInfo` dengan `PipSize`, `PipValue`, `MinLot`, `LotStep`, `ContractSize`
+- `DefaultSymbolInfo` map untuk semua 8 pasangan forex yang didukung
+- `CalculateLotSize(equity, riskPercent, stopLossPips, SymbolInfo) float64`
+- Rumus: `lot = (equity × risk%) / (SL_pips × pip_value)`, dibulatkan ke LotStep
+- Dipanggil di `openTrade` setelah ATR dihitung (non-Scalping), fallback ke `risk/price` untuk Scalping
+
+### B. ATR-based Stop Loss & Take Profit (`internal/indicator/indicator.go`)
+- `ATR(highs, lows, closes []float64, period int) float64` — Wilder's smoothed ATR
+- Diaktifkan di `openTrade`: **SL = entry ± 1.5×ATR**, **TP = entry ± 3.0×ATR**
+- Scalping tetap menggunakan fixed % SL/TP (tidak berubah)
+- `GetHighLows(symbol)` ditambahkan ke `market.Market` untuk feed data ATR
+
+### C. Multi-Timeframe Confirmation (`internal/bot/bot.go`)
+- `ConfirmHigherTF(symbol, signalDirection string, mkt *market.Market) bool`
+- Menggunakan `GetHigherTFCloses(symbol, 6)` — agregasi setiap 6 candle menjadi 1 candle HTF
+- BUY valid hanya jika EMA9 > EMA21 di HTF; SELL valid jika EMA9 < EMA21
+- Jika data tidak cukup (< 22 candle HTF): return true (jangan blokir trade)
+- Diterapkan di `Tick()` untuk semua strategy kecuali Scalping
+
+### D. Breakeven + Trailing Stop (`internal/bot/trade_manager.go`)
+- `UpdateTrailingStop(trade, currentPrice, symbol)` — dipanggil setiap tick
+- Breakeven: profit ≥ 20 pip → SL dipindah ke entry price
+- Trailing: profit ≥ 30 pip → SL trailing dengan jarak 15 pip dari harga saat ini
+- Trade struct diperluas: `SLPrice`, `TPPrice`, `BreakevenSet`, `TrailingActive`, `IsDryRun`
+
+### E. Order Validation (`internal/mt5/order.go`)
+- `ValidateOrder(symbol, volume, marginRequired float64, acc *AccountInfo) error`
+- Cek 1: `margin_required < free_margin × 0.8`
+- Cek 2: `volume >= 0.01` (minimal lot)
+- Cek 3: volume adalah kelipatan `0.01` (lot step)
+- Cek 4: tolak order di jam **13:30–14:30 UTC** (news blackout)
+
+## Log & Monitoring (Bagian 3)
+
+### A. Enhanced Logging (`internal/logger/logger.go`)
+- `OrderFailed(botID, symbol, reason)` — log order yang ditolak beserta alasan detail
+- `DrawdownSnapshot(currentEquity, peakEquity, drawdownPct)` — log setiap 5 menit via tickMsg
+- `DailyPL(todayProfit, todayLoss, winRate)` — log otomatis saat pergantian hari (midnight)
+- Semua tersimpan di `finex-bot.log` dengan format konsisten `KIND | timestamp | detail`
+
+### B. Paper Trading Mode (`main.go`)
+- Flag `--dry-run`: `./finex-bot --dry-run`
+- Semua order ditandai `IsDryRun: true` pada Trade struct
+- Slippage acak **±1 pip** diterapkan ke entry price untuk realisme simulasi
+- Session log dimulai dengan mode `"DRY-RUN"` (bukan `"DEMO"`)
+- `DryRun bool` di-wire ke setiap bot dari `initialModel(dryRun bool)`
+
 ## Key Design Decisions
 
 - **No crypto** — all pairs are forex majors + crosses (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, EURGBP, EURJPY)

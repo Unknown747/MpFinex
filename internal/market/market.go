@@ -210,3 +210,32 @@ func (m *Market) GetCloses(symbol string) []float64 {
         }
         return out
 }
+
+// GetHighLows returns parallel slices of High and Low prices from candle history.
+// Used by ATR calculations.
+func (m *Market) GetHighLows(symbol string) (highs, lows []float64) {
+        candles := m.history[symbol]
+        highs = make([]float64, len(candles))
+        lows = make([]float64, len(candles))
+        for i, c := range candles {
+                highs[i] = c.High
+                lows[i] = c.Low
+        }
+        return
+}
+
+// GetHigherTFCloses mengagregasi history candle menjadi timeframe yang lebih tinggi
+// dengan mengambil Close terakhir dari setiap kelompok `factor` candle.
+// Contoh: factor=6 → setiap 6 candle M1 digabung menjadi 1 candle M5-equivalent.
+// Digunakan untuk analisis multi-timeframe tanpa data feed terpisah.
+func (m *Market) GetHigherTFCloses(symbol string, factor int) []float64 {
+        candles := m.history[symbol]
+        if len(candles) == 0 || factor <= 0 {
+                return nil
+        }
+        var closes []float64
+        for i := factor - 1; i < len(candles); i += factor {
+                closes = append(closes, candles[i].Close)
+        }
+        return closes
+}

@@ -291,12 +291,20 @@ type Model struct {
 
         // Activity logger
         log *logger.Logger
+
+        // Periodic logging state
+        lastDrawdownLog time.Time // last time DrawdownSnapshot was logged
+        lastDailyLog    time.Time // last date DailyPL was logged (check day change)
+        peakEquity      float64   // peak equity seen this session (for drawdown calc)
+
+        // Paper trading
+        dryRun bool
 }
 
 // logPath is where the activity log is written.
 const logPath = "finex-bot.log"
 
-func initialModel() Model {
+func initialModel(dryRun bool) Model {
         dm := account.NewDemoAccount()
         rm := account.NewRealAccount()
         mkt := market.NewMarket()
@@ -304,28 +312,38 @@ func initialModel() Model {
         if len(bots) == 0 {
                 bots = botpkg.DefaultBots()
         }
+        // Wire dry-run flag to every bot
+        for _, b := range bots {
+                b.DryRun = dryRun
+        }
         mt5Client := mt5.NewClient(mt5.ConfigFromEnv())
 
         // Open activity log (ignore error — bot runs fine without it).
         lg, _ := logger.New(logPath)
 
         mode := "DEMO"
+        if dryRun {
+                mode = "DRY-RUN"
+        }
         if lg != nil {
                 lg.SessionStart("1.0.0", mode)
         }
 
         m := Model{
-                activeTab:   TabDashboard,
-                viewMode:    ViewList,
-                demoAccount: dm,
-                realAccount: rm,
-                useReal:     false,
-                mkt:         mkt,
-                bots:        bots,
-                selectedBot: 0,
-                mt5Client:   mt5Client,
-                mt5Status:   mt5.StatusDisconnected,
-                log:         lg,
+                activeTab:    TabDashboard,
+                viewMode:     ViewList,
+                demoAccount:  dm,
+                realAccount:  rm,
+                useReal:      false,
+                mkt:          mkt,
+                bots:         bots,
+                selectedBot:  0,
+                mt5Client:    mt5Client,
+                mt5Status:    mt5.StatusDisconnected,
+                log:          lg,
+                lastDailyLog: time.Now(),
+                peakEquity:   dm.Equity,
+                dryRun:       dryRun,
         }
 
         // Wire trade callbacks so every open/close is logged automatically.
@@ -496,6 +514,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
                         }
                 }
                 acc.Equity = acc.Balance + openPnL
+
+                // ── Periodic: log drawdown snapshot setiap 5 menit ───────────────────
+                if m.log != nil && time.Since(m.lastDrawdownLog) >= 5*time.Minute {
+                        m.lastDrawdownLog = time.Now()
+                        if acc.Equity > m.peakEquity {
+                                m.peakEquity = acc.Equity
+                        }
+                        if m.peakEquity > 0 {
+                                drawdownPct := (m.peakEquity - acc.Equity) / m.peakEquity * 100
+                                m.log.DrawdownSnapshot(acc.Equity, m.peakEquity, drawdownPct)
+                        }
+                }
+
+                // ── Periodic: log daily P&L saat pergantian hari ─────────────────────
+                now := time.Now()
+                if m.log != nil && (now.YearDay() != m.lastDailyLog.YearDay() || now.Year() != m.lastDailyLog.Year()) {
+                        m.lastDailyLog = now
+                        todayProfit, todayLoss, winRate := calcDailyStats(m.bots)
+                        m.log.DailyPL(todayProfit, todayLoss, winRate)
+                }
+
                 return m, tickCmd()
 
         case tea.KeyMsg:
@@ -1718,8 +1757,44 @@ func (m Model) renderHelp() string {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
+// calcDailyStats menjumlahkan profit/loss dari semua trade yang ditutup hari ini.
+func calcDailyStats(bots []*botpkg.Bot) (profit, loss, winRate float64) {
+        today := time.Now()
+        wins, losses := 0, 0
+        for _, b := range bots {
+                for _, t := range b.Trades {
+                        if t.Status != botpkg.Closed {
+                                continue
+                        }
+                        if t.ClosedAt.Year() != today.Year() || t.ClosedAt.YearDay() != today.YearDay() {
+                                continue
+                        }
+                        if t.PnL > 0 {
+                                profit += t.PnL
+                                wins++
+                        } else {
+                                loss += t.PnL // negatif
+                                losses++
+                        }
+                }
+        }
+        total := wins + losses
+        if total > 0 {
+                winRate = float64(wins) / float64(total) * 100
+        }
+        return
+}
+
 func main() {
-        m := initialModel()
+        // Parse --dry-run flag
+        dryRun := false
+        for _, arg := range os.Args[1:] {
+                if arg == "--dry-run" || arg == "-dry-run" {
+                        dryRun = true
+                }
+        }
+
+        m := initialModel(dryRun)
         p := tea.NewProgram(m,
                 tea.WithAltScreen(),
                 tea.WithMouseCellMotion(),
