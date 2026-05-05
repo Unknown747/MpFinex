@@ -50,3 +50,11 @@ externalPort = 8080
 [[ports]]
 localPort = 8081
 externalPort = 80
+
+[userenv]
+
+[userenv.shared]
+FINEX_COMPANY = "FinexBisnisSolusi"
+FINEX_LOGIN = "61369797"
+FINEX_SERVER = "FinexBisnisSolusi-Demo"
+FINEX_HOST = "prod-mt5-demo1.fnx.xmt.mx:443"
