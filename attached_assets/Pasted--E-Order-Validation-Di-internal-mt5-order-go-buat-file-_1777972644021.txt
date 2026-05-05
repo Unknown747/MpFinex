@@ -1,0 +1,54 @@
+### E. Order Validation
+- Di `internal/mt5/order.go` (buat file baru)
+- Fungsi `ValidateOrder(symbol string, volume float64, accountInfo Account) error`:
+  * Cek margin cukup: margin_required < free_margin * 0.8
+  * Cek volume >= minimal_lot
+  * Cek volume step kelipatan lot_step
+  * Cek tidak ada order di jam 13:30 - 14:30 GMT (high impact news default)
+  * Return error detail jika gagal
+
+================================================================================
+BAGIAN 2: PROFITABILITAS DASAR
+================================================================================
+
+### A. Dynamic Lot Sizing (Risk % per trade)
+- Di `internal/bot/risk.go`, tambahkan:
+  `CalculateLotSize(equity float64, riskPercent float64, stopLossPips float64, symbolInfo SymbolInfo) float64`
+- Rumus: lot_size = (equity * riskPercent/100) / (stopLossPips * pip_value)
+- Risk percent default 1.5% per trade
+- Panggil fungsi ini di setiap strategy sebelum entry
+
+### B. ATR-based Stop Loss & Take Profit
+- Tambahkan fungsi `CalculateATR(symbol string, period int) float64` di `internal/indicator/indicator.go`
+- Gunakan ATR(14) untuk menentukan:
+  * SL = current_price ± (1.5 × ATR)
+  * TP = current_price ± (3.0 × ATR)
+- Override strategy fixed TP/SL dengan metode ini untuk setiap strategy kecuali Scalping (tetap fixed)
+
+### C. Multi-timeframe Confirmation
+- Di `internal/bot/bot.go`, sebelum eksekusi signal:
+  * Jika timeframe bot M5, cek H1 untuk trend alignment
+  * BUY signal valid hanya jika H1 trend up (EMA9 > EMA21)
+  * SELL signal valid hanya jika H1 trend down (EMA9 < EMA21)
+  * Buat fungsi `ConfirmHigherTF(symbol string, currentTF string, signalDirection string) bool`
+
+### D. Breakeven + Trailing Stop
+- Di `internal/bot/trade_manager.go` (file baru):
+  * Setelah profit mencapai 20 pips → pindahkan SL ke entry price (breakeven)
+  * Setelah profit mencapai 30 pips → aktifkan trailing stop dengan jarak 15 pips
+  * Update SL setiap tick menggunakan price streaming
+
+================================================================================
+BAGIAN 3: LOG & MONITORING
+================================================================================
+
+### A. Enhanced Logging
+- Di `internal/logger/logger.go`, tambahkan:
+  * Log setiap order gagal dengan alasan lengkap (margin, volume, news)
+  * Log floating drawdown setiap 5 menit (format: "DRAWDOWN: current_equity, peak_equity, drawdown_percent")
+  * Log daily P&L setiap tengah malam (format: "DAILY_PL: today_profit, today_loss, win_rate")
+
+### B. Paper Trading Mode
+- Tambahkan flag `--dry-run` di `main.go`
+- Jika dry-run true, semua order hanya dilog, tidak dikirim ke MT5
+- Simulasi eksekusi dengan delay random 200-500ms dan slippage ±1 pip

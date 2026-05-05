@@ -73,6 +73,9 @@ type Bot struct {
         rng           *rand.Rand
         tradeCounter  int
 
+        // Risk management — nil means no limits enforced.
+        Risk *RiskLimits
+
         // Optional callbacks fired on trade events (set by main to wire logger).
         OnTradeOpen  func(ev TradeEvent)
         OnTradeClose func(ev TradeEvent)
@@ -109,6 +112,22 @@ func (b *Bot) TradeCount() int {
         return len(b.Trades)
 }
 
+// CloseAllPositions menutup posisi yang sedang terbuka pada harga saat ini.
+// Dipanggil oleh RiskLimits saat daily loss limit atau max drawdown terlewati.
+func (b *Bot) CloseAllPositions(currentPrice float64) {
+        if b.OpenTrade == nil {
+                return
+        }
+        entry := b.OpenTrade.EntryPrice
+        var pnlPct float64
+        if b.OpenTrade.Side == Buy {
+                pnlPct = (currentPrice - entry) / entry
+        } else {
+                pnlPct = (entry - currentPrice) / entry
+        }
+        b.closeTrade(currentPrice, pnlPct)
+}
+
 func (b *Bot) Tick(mkt *market.Market, accountBalance float64) {
         if !b.IsRunning {
                 return
@@ -122,6 +141,16 @@ func (b *Bot) Tick(mkt *market.Market, accountBalance float64) {
         if b.OpenTrade != nil {
                 b.checkCloseCondition(price.Price, mkt.GetCloses(b.Symbol))
                 return
+        }
+
+        // Periksa risk limits sebelum membuka posisi baru
+        if b.Risk != nil {
+                if !b.Risk.CheckDailyLoss(accountBalance, b, price.Price) {
+                        return
+                }
+                if !b.Risk.CheckDrawdown(accountBalance, b, price.Price) {
+                        return
+                }
         }
 
         closes := mkt.GetCloses(b.Symbol)

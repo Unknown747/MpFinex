@@ -42,6 +42,29 @@ Set via Replit Secrets / userenv:
 | `FINEX_HOST` | userenv.shared | MT5 host:port |
 | `FINEX_PASSWORD` | Replit Secret | Never in plaintext |
 
+## Security Features (Bagian 1)
+
+### A. Daily Loss Limit & B. Max Drawdown Trailing (`internal/bot/risk.go`)
+- Struct `RiskLimits` dengan `MaxDailyLossPercent`, `MaxDrawdownPercent`, `InitialEquity`, `PeakEquity`, `DailyLoss`, `LastReset`
+- `CheckDailyLoss(equity, bot, price)`: Reset tiap hari baru, bandingkan loss vs limit, tutup posisi + stop bot jika terlampaui
+- `CheckDrawdown(equity, bot, price)`: Tracking peak equity, hitung drawdown%, tutup posisi + stop bot jika terlampaui
+- Diaktifkan per-bot via `bot.Risk = bot.NewRiskLimits(maxDailyLoss%, maxDrawdown%, initialEquity)`
+- Dipanggil di `bot.Tick()` sebelum setiap entry order baru
+
+### C. Enkripsi Credentials (`internal/config/encrypt.go`)
+- AES-256-GCM dengan key dari env var `ENCRYPTION_KEY` (wajib 32 byte)
+- `EncryptCredentials(login, password, server)` → base64 ciphertext
+- `DecryptCredentials(ciphertext)` → login, password, server
+- Program exit dengan pesan error jika `ENCRYPTION_KEY` tidak ada atau bukan 32 byte
+
+### D. Connection Watchdog (`internal/mt5/heartbeat.go`)
+- `StartHeartbeat(client, interval, onPermanentFailure)` — goroutine background
+- Kirim `CmdPing` setiap 3 detik; 2 gagal berturut-turut → trigger reconnect
+- Exponential backoff reconnect: 1s → 2s → 4s → 8s, maksimal 3 percobaan
+- Jika semua gagal: log "MT5 disconnected permanently", tutup semua posisi, shutdown TUI via `heartbeatShutdownMsg`
+- Koneksi persisten disimpan di `client.conn` (thread-safe via `sync.Mutex`)
+- Method baru di `mt5.Client`: `Ping() error`, `Disconnect()`
+
 ## Key Design Decisions
 
 - **No crypto** — all pairs are forex majors + crosses (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, EURGBP, EURJPY)

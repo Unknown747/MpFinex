@@ -6,6 +6,7 @@ import (
         "fmt"
         "net"
         "os"
+        "sync"
         "time"
 )
 
@@ -75,10 +76,38 @@ type Client struct {
         ErrMsg  string
         Account *AccountInfo
         Debug   []string // diagnostic log lines (last N entries)
+
+        mu   sync.Mutex
+        conn net.Conn // persistent connection kept alive by heartbeat
 }
 
 func NewClient(cfg Config) *Client {
         return &Client{Config: cfg, Status: StatusDisconnected}
+}
+
+// Ping mengirim CmdPing ke server MT5 pada koneksi yang sedang aktif.
+// Digunakan oleh heartbeat untuk memverifikasi koneksi masih hidup.
+func (c *Client) Ping() error {
+        c.mu.Lock()
+        conn := c.conn
+        c.mu.Unlock()
+
+        if conn == nil {
+                return fmt.Errorf("tidak ada koneksi aktif")
+        }
+        return writePacket(conn, CmdPing, nil)
+}
+
+// Disconnect menutup koneksi aktif dan mereset status ke Disconnected.
+func (c *Client) Disconnect() {
+        c.mu.Lock()
+        defer c.mu.Unlock()
+
+        if c.conn != nil {
+                c.conn.Close()
+                c.conn = nil
+        }
+        c.Status = StatusDisconnected
 }
 
 func (c *Client) log(msg string) {
@@ -128,7 +157,24 @@ func (c *Client) Connect() {
                 c.log("✗ " + c.ErrMsg)
                 return
         }
-        defer conn.Close()
+
+        // Tutup koneksi lama jika ada, simpan yang baru.
+        // Jika handshake gagal, closeOnFail akan menutupnya.
+        c.mu.Lock()
+        if c.conn != nil {
+                c.conn.Close()
+                c.conn = nil
+        }
+        c.mu.Unlock()
+
+        // Tutup conn otomatis jika fungsi keluar sebelum sukses.
+        connected := false
+        defer func() {
+                if !connected {
+                        conn.Close()
+                }
+        }()
+
         c.log("✓ TLS connected")
 
         // ── Step 1: Read server Hello ────────────────────────────────────────────
@@ -275,6 +321,12 @@ func (c *Client) Connect() {
                 // Still mark as connected — user will see the green badge.
                 c.log("✓ Auth succeeded (account fields tidak dikenali)")
         }
+
+        // Simpan koneksi untuk digunakan oleh Ping() / heartbeat.
+        c.mu.Lock()
+        c.conn = conn
+        c.mu.Unlock()
+        connected = true
 
         c.Status = StatusConnected
         c.ErrMsg = ""
