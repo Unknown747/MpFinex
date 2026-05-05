@@ -66,6 +66,18 @@ type Trade struct {
         TicksSinceOpen int
 }
 
+// LimitOrder mewakili pending limit order yang menunggu harga mencapai level tertentu
+// sebelum eksekusi. Dibuat oleh openTrade() dan dipantau setiap tick.
+// Jika harga tidak mencapai LimitPrice dalam 30 detik, fallback ke market order.
+type LimitOrder struct {
+        Side       TradeSide // BUY atau SELL
+        LimitPrice float64   // harga target entry
+        Volume     float64   // ukuran lot yang akan dibuka
+        SLDist     float64   // jarak SL dari entry price (0 = gunakan % fallback)
+        TPDist     float64   // jarak TP dari entry price (0 = gunakan % fallback)
+        ExpiresAt  time.Time // deadline; setelah ini fallback ke market order
+}
+
 // TradeEvent carries all info about a trade open or close.
 type TradeEvent struct {
         Bot   *Bot
@@ -86,6 +98,8 @@ type Bot struct {
         LossCount     int
         Trades        []*Trade
         OpenTrade     *Trade
+        PendingLimit  *LimitOrder  // limit order yang menunggu fill (nil jika tidak ada)
+        Profile       *RiskProfile // profil risiko dinamis berbasis win rate & consecutive loss
         rng           *rand.Rand
         tradeCounter  int
 
@@ -113,6 +127,7 @@ func NewBot(id int, name, symbol string, strategy Strategy, risk, tp, sl float64
                 StopLossPct:   sl,
                 Trades:        make([]*Trade, 0),
                 rng:           rand.New(rand.NewSource(time.Now().UnixNano() + int64(id))),
+                Profile:       NewRiskProfile(),
         }
 }
 
@@ -164,6 +179,12 @@ func (b *Bot) Tick(mkt *market.Market, accountBalance float64) {
                 return
         }
 
+        // Cek pending limit order — tunggu fill sebelum terima sinyal baru
+        if b.PendingLimit != nil {
+                b.checkFillLimit(price.Price)
+                return
+        }
+
         // Periksa risk limits sebelum membuka posisi baru
         if b.Risk != nil {
                 if !b.Risk.CheckDailyLoss(accountBalance, b, price.Price) {
@@ -172,6 +193,11 @@ func (b *Bot) Tick(mkt *market.Market, accountBalance float64) {
                 if !b.Risk.CheckDrawdown(accountBalance, b, price.Price) {
                         return
                 }
+        }
+
+        // Cooldown setelah 5 consecutive loss (1 jam tidak trading)
+        if b.Profile != nil && b.Profile.IsCoolingDown() {
+                return
         }
 
         // News blackout — lewati semua entry saat ada rilis berita berdampak tinggi
@@ -233,55 +259,122 @@ func (b *Bot) openTrade(price, balance float64, sig indicator.Signal, mkt *marke
                 }
         }
 
-        // Terapkan slippage acak ±1 pip pada paper trade (dry-run mode)
-        entryPrice := price
-        if b.DryRun {
-                symInfo := DefaultSymbolInfo[b.Symbol]
-                pipSize := symInfo.PipSize
-                if pipSize == 0 {
-                        pipSize = 0.0001
-                }
-                slippage := (b.rng.Float64()*2 - 1) * pipSize
-                entryPrice = price + slippage
+        // Ambil risk percent efektif dari profil dinamis (win rate & consecutive loss aware)
+        riskPct := b.RiskPct
+        if b.Profile != nil {
+                riskPct = b.Profile.EffectiveRisk()
         }
 
-        // Hitung ATR-based SL/TP untuk semua strategy kecuali Scalping
-        var slPrice, tpPrice, qty float64
+        // Ambil spesifikasi simbol — digunakan untuk pip size, spread, dan lot calc
+        symInfo := DefaultSymbolInfo[b.Symbol]
+        pipSize := symInfo.PipSize
+        if pipSize == 0 {
+                pipSize = 0.0001
+        }
+
+        // Hitung ATR-based SL/TP dan lot size untuk semua strategy kecuali Scalping
+        var slDist, tpDist, qty float64
         if b.Strategy != Scalping {
                 highs, lows := mkt.GetHighLows(b.Symbol)
                 closes := mkt.GetCloses(b.Symbol)
                 atr := indicator.ATR(highs, lows, closes, 14)
-
-                symInfo := DefaultSymbolInfo[b.Symbol]
-                pipSize := symInfo.PipSize
-                if pipSize == 0 {
-                        pipSize = 0.0001
-                }
-
                 if atr > 0 {
-                        slDist := 1.5 * atr
-                        tpDist := 3.0 * atr
-                        if side == Buy {
-                                slPrice = entryPrice - slDist
-                                tpPrice = entryPrice + tpDist
-                        } else {
-                                slPrice = entryPrice + slDist
-                                tpPrice = entryPrice - tpDist
-                        }
-                        // Dynamic lot sizing berbasis ATR stop loss
+                        slDist = 1.5 * atr
+                        tpDist = 3.0 * atr
                         stopLossPips := slDist / pipSize
-                        qty = CalculateLotSize(balance, b.RiskPct, stopLossPips, symInfo)
+                        qty = CalculateLotSize(balance, riskPct, stopLossPips, symInfo)
                 }
         }
 
         // Fallback ke fixed lot sizing jika ATR tidak tersedia (atau Scalping)
         if qty == 0 {
-                risk := balance * (b.RiskPct / 100)
-                if entryPrice > 0 {
-                        qty = risk / entryPrice
+                risk := balance * (riskPct / 100)
+                if price > 0 {
+                        qty = risk / price
                 }
                 if qty == 0 {
                         qty = 0.01
+                }
+        }
+
+        // Hitung limit price: masuk di harga lebih baik dari market
+        //   BUY limit  = harga − spread×1.5  (menunggu retracement ke bawah)
+        //   SELL limit = harga + spread×1.5  (menunggu retracement ke atas)
+        spread := symInfo.Spread
+        if spread == 0 {
+                spread = pipSize * 2 // fallback: 2 pip spread
+        }
+        limitPrice := price - spread*1.5
+        if side == Sell {
+                limitPrice = price + spread*1.5
+        }
+
+        // Daftarkan pending limit order; eksekusi saat harga mencapai level ini
+        b.PendingLimit = &LimitOrder{
+                Side:       side,
+                LimitPrice: limitPrice,
+                Volume:     qty,
+                SLDist:     slDist,
+                TPDist:     tpDist,
+                ExpiresAt:  time.Now().Add(30 * time.Second),
+        }
+}
+
+// checkFillLimit memeriksa apakah pending limit order sudah terisi setiap tick.
+//
+// Kondisi fill:
+//   - BUY  : harga turun ke atau di bawah LimitPrice → fill di LimitPrice
+//   - SELL : harga naik ke atau di atas LimitPrice  → fill di LimitPrice
+//   - Expired (> 30 detik): fallback ke market order pada harga saat ini
+//
+// Setelah fill, PendingLimit dibersihkan dan executeTrade() dipanggil.
+func (b *Bot) checkFillLimit(currentPrice float64) {
+        p := b.PendingLimit
+        if p == nil {
+                return
+        }
+
+        var fillPrice float64
+        switch {
+        case p.Side == Buy && currentPrice <= p.LimitPrice:
+                fillPrice = p.LimitPrice // limit terisi di harga yang diinginkan
+        case p.Side == Sell && currentPrice >= p.LimitPrice:
+                fillPrice = p.LimitPrice
+        case time.Now().After(p.ExpiresAt):
+                fillPrice = currentPrice // fallback: market order setelah 30 detik
+        }
+
+        if fillPrice == 0 {
+                return // belum terisi — tunggu tick berikutnya
+        }
+
+        b.PendingLimit = nil
+        b.executeTrade(p.Side, fillPrice, p.Volume, p.SLDist, p.TPDist)
+}
+
+// executeTrade membuka posisi nyata setelah limit order terisi atau market fallback.
+// Slippage ±1 pip diterapkan pada mode dry-run untuk realisme.
+// SL/TP dihitung dari entryPrice + SLDist/TPDist; jika keduanya 0 → gunakan % fallback.
+func (b *Bot) executeTrade(side TradeSide, entryPrice, qty, slDist, tpDist float64) {
+        // Terapkan slippage acak ±1 pip pada paper trade
+        if b.DryRun {
+                symInfo := DefaultSymbolInfo[b.Symbol]
+                pip := symInfo.PipSize
+                if pip == 0 {
+                        pip = 0.0001
+                }
+                slippage := (b.rng.Float64()*2 - 1) * pip
+                entryPrice += slippage
+        }
+
+        var slPrice, tpPrice float64
+        if slDist > 0 {
+                if side == Buy {
+                        slPrice = entryPrice - slDist
+                        tpPrice = entryPrice + tpDist
+                } else {
+                        slPrice = entryPrice + slDist
+                        tpPrice = entryPrice - tpDist
                 }
         }
 
@@ -392,6 +485,11 @@ func (b *Bot) closeTrade(exitPrice, pnlPct float64) {
                 b.WinCount++
         } else {
                 b.LossCount++
+        }
+
+        // Catat hasil ke profil risiko dinamis untuk penyesuaian risk % berikutnya
+        if b.Profile != nil {
+                b.Profile.RecordResult(trade.PnL >= 0)
         }
 
         b.Trades = append(b.Trades, trade)

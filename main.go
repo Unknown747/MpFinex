@@ -17,6 +17,7 @@ import (
         "github.com/finex/finex-cli/internal/logger"
         "github.com/finex/finex-cli/internal/market"
         "github.com/finex/finex-cli/internal/mt5"
+        "github.com/finex/finex-cli/internal/optimizer"
 )
 
 // ─── Tick ───────────────────────────────────────────────────────────────────
@@ -1785,13 +1786,60 @@ func calcDailyStats(bots []*botpkg.Bot) (profit, loss, winRate float64) {
         return
 }
 
+// runOptimizer menjalankan Genetic Algorithm optimizer untuk simbol yang diberikan
+// pada semua 4 strategy, lalu menyimpan hasilnya ke optimized_params.json.
+// Dijalankan via: ./finex-bot --optimize EURUSD
+func runOptimizer(symbol string) {
+        fmt.Printf("Finex Optimizer — memulai optimasi untuk %s...\n\n", symbol)
+        mkt := market.NewMarket()
+        candles := mkt.GetHistory(symbol)
+        if len(candles) == 0 {
+                fmt.Fprintf(os.Stderr, "Error: tidak ada data candle untuk simbol %s\n", symbol)
+                os.Exit(1)
+        }
+
+        strategies := []string{"Scalping", "Trend Following", "Swing Trading", "Mean Reversion"}
+        results := make([]optimizer.OptimizedResult, 0, len(strategies))
+
+        for _, strat := range strategies {
+                fmt.Printf("  %-20s ... ", strat)
+                result := optimizer.Optimize(symbol, strat, candles)
+                results = append(results, result)
+                fmt.Printf("fitness=%.4f  wr=%.1f%%  pf=%.2f\n",
+                        result.Fitness, result.WinRate, result.ProfitFactor)
+                fmt.Printf("    RSI(%d) buy<%.0f sell>%.0f | EMA(%d/%d) | BB(%d, %.1fσ)\n",
+                        result.Params.RSIPeriod, result.Params.RSIBuy, result.Params.RSISell,
+                        result.Params.EMAFast, result.Params.EMASlow,
+                        result.Params.BBPeriod, result.Params.BBMult)
+        }
+
+        if err := optimizer.SaveResults(results); err != nil {
+                fmt.Fprintf(os.Stderr, "\nError menyimpan hasil: %v\n", err)
+                os.Exit(1)
+        }
+        fmt.Printf("\nHasil disimpan ke %s\n", optimizer.OutputFile)
+}
+
 func main() {
-        // Parse --dry-run flag
+        // Parse flags
         dryRun := false
-        for _, arg := range os.Args[1:] {
-                if arg == "--dry-run" || arg == "-dry-run" {
+        optimizeSymbol := ""
+        args := os.Args[1:]
+        for i, arg := range args {
+                switch arg {
+                case "--dry-run", "-dry-run":
                         dryRun = true
+                case "--optimize", "-optimize":
+                        if i+1 < len(args) {
+                                optimizeSymbol = strings.ToUpper(args[i+1])
+                        }
                 }
+        }
+
+        // Optimizer mode: jalankan GA tanpa TUI lalu exit
+        if optimizeSymbol != "" {
+                runOptimizer(optimizeSymbol)
+                return
         }
 
         m := initialModel(dryRun)

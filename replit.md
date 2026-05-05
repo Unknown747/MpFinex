@@ -159,6 +159,45 @@ Set via Replit Secrets / userenv:
 - `checkCloseCondition` diperluas dengan `highs, lows []float64` parameter
 - Dipanggil di `checkCloseCondition` setelah trailing stop update, sebelum SL/TP check
 
+## Risk & Entry Optimization (Bagian C–E)
+
+### C. Dynamic Risk Adjustment (`internal/bot/risk.go` — RiskProfile)
+- `RiskProfile` struct: rolling window 20 trade terakhir, `ConsecutiveLoss`, `CurrentRiskPercent`, `coolingUntil`
+- `NewRiskProfile()` — inisialisasi dengan risk default 1.5%
+- `RecordResult(win bool)` — otomatis dipanggil di `closeTrade()` setiap trade ditutup
+- Aturan penyesuaian risk (berdasarkan rolling win rate):
+  * Win rate > 60% → risk **2.0%** per trade
+  * Win rate 40–60% → risk **1.5%** per trade (default)
+  * Win rate < 40% → risk **1.0%** per trade
+- `EffectiveRisk()` — memotong risk 50% jika `ConsecutiveLoss ≥ 3` (minimum 0.1%)
+- `IsCoolingDown()` — return `true` jika dalam cooldown (dipicu oleh 5 consecutive loss → **halt 1 jam**)
+- Win trade → reset `ConsecutiveLoss = 0`; digunakan di `openTrade()` via `Profile.EffectiveRisk()`
+- `RollingWinRate()` — win rate rolling window untuk display TUI
+
+### D. Limit Order Entry (`internal/bot/bot.go`)
+- `LimitOrder` struct: `Side`, `LimitPrice`, `Volume`, `SLDist`, `TPDist`, `ExpiresAt`
+- `Bot.PendingLimit *LimitOrder` — limit order yang menunggu fill (nil jika tidak ada)
+- `SymbolInfo.Spread float64` ditambahkan ke `DefaultSymbolInfo` (tiap pair memiliki spread tipikal)
+- Entry flow baru:
+  * `openTrade()` tidak langsung membuka Trade — melainkan set `b.PendingLimit`
+  * BUY limit = harga − spread×1.5; SELL limit = harga + spread×1.5
+  * Deadline: **30 detik**; setelah itu fallback ke market order
+- `checkFillLimit(currentPrice)` — dipanggil setiap tick; fill jika harga menyentuh level
+- `executeTrade(side, entryPrice, qty, slDist, tpDist)` — membuka Trade aktual (dengan slippage dry-run)
+- SL/TP dihitung dari actual fill price (bukan signal price) untuk akurasi yang lebih baik
+- `Tick()` flow baru: cek PendingLimit sebelum generate sinyal baru; cooldown sebelum news filter
+
+### E. Genetic Algorithm Optimizer (`internal/optimizer/genetic.go`)
+- `Params` struct: RSIPeriod, RSIBuy, RSISell, EMAFast, EMASlow, BBPeriod, BBMult
+- `Optimize(symbol, strategy, candles)` — GA utama, return `OptimizedResult` terbaik
+- GA konfigurasi: **populasi 20**, **10 generasi**, tournament selection (k=3), elitism
+- Fitness function: `profit_factor × win_rate / max_drawdown` (penalti jika < 5 trade)
+- Backtest walk-forward: SL=0.5%, TP=1.0% per trade simulasi
+- `SaveResults(results)` — simpan/merge ke `optimized_params.json` (tidak overwrite pair lain)
+- CLI: `./finex-bot --optimize EURUSD` → jalankan optimizer 4 strategy, print hasil, simpan JSON
+- `runOptimizer()` di `main.go`: print tabel fitness/win rate/profit factor + params per strategy
+- Strategy yang dioptimalkan: Scalping, Trend Following, Swing Trading, Mean Reversion
+
 ## Key Design Decisions
 
 - **No crypto** — all pairs are forex majors + crosses (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, EURGBP, EURJPY)
