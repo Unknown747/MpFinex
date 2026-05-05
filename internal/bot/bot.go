@@ -174,8 +174,11 @@ func (b *Bot) openTrade(price, balance float64, sig indicator.Signal) {
         }
 }
 
-// checkCloseCondition exits the trade on TP/SL hit, or when the indicator
-// signal reverses (exit on signal flip for tighter discipline).
+// checkCloseCondition exits the trade on TP/SL hit.
+// For trend-following strategies, also exits early when the signal reverses
+// (momentum flip). Contrarian strategies (Swing, MeanReversion) hold through
+// noise and only exit at TP/SL — exiting on a reversal signal would defeat
+// the purpose of a counter-trend approach.
 func (b *Bot) checkCloseCondition(currentPrice float64, closes []float64) {
         if b.OpenTrade == nil {
                 return
@@ -192,19 +195,22 @@ func (b *Bot) checkCloseCondition(currentPrice float64, closes []float64) {
                 pnlPct = (entry - currentPrice) / entry
         }
 
-        // Primary exit: TP or SL hit
+        // Primary exit: TP or SL
         if pnlPct >= tp || pnlPct <= -sl {
                 b.closeTrade(currentPrice, pnlPct)
                 return
         }
 
-        // Secondary exit: indicator signal reverses direction → cut early
-        sig := b.getSignal(closes)
-        if sig != indicator.None {
-                isLong := b.OpenTrade.Side == Buy
-                reversal := (isLong && sig == indicator.Short) || (!isLong && sig == indicator.Long)
-                if reversal {
-                        b.closeTrade(currentPrice, pnlPct)
+        // Secondary exit (trend strategies only): cut when momentum reverses.
+        // Scalping uses tight TP/SL — no reversal exit needed.
+        // Swing & MeanReversion are contrarian — hold through pullbacks.
+        if b.Strategy == TrendFollowing {
+                sig := b.getSignal(closes)
+                if sig != indicator.None {
+                        isLong := b.OpenTrade.Side == Buy
+                        if (isLong && sig == indicator.Short) || (!isLong && sig == indicator.Long) {
+                                b.closeTrade(currentPrice, pnlPct)
+                        }
                 }
         }
 }

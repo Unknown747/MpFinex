@@ -54,15 +54,20 @@ var defaultPrices = map[string]float64{
         "EURJPY": 167.50,
 }
 
+// volatility is the per-tick fractional move for each pair.
+// Values are calibrated for the simulator: ~10-15 pips per tick on major pairs,
+// which corresponds to ~30-50 pip candle ranges (10 ticks/candle).
+// This is realistic for a fast 10-second candle display where each tick
+// represents one second of live intraday forex movement.
 var volatility = map[string]float64{
-        "EURUSD": 0.00030,
-        "GBPUSD": 0.00040,
-        "USDJPY": 0.03000,
-        "AUDUSD": 0.00035,
-        "USDCAD": 0.00030,
-        "USDCHF": 0.00028,
-        "EURGBP": 0.00022,
-        "EURJPY": 0.04000,
+        "EURUSD": 0.00100,
+        "GBPUSD": 0.00120,
+        "USDJPY": 0.00100,
+        "AUDUSD": 0.00110,
+        "USDCAD": 0.00100,
+        "USDCHF": 0.00095,
+        "EURGBP": 0.00075,
+        "EURJPY": 0.00110,
 }
 
 // candleIntervalTicks is how many 1-second ticks make up one candle.
@@ -92,15 +97,22 @@ func NewMarket() *Market {
 
 func (m *Market) generateHistory(symbol string, basePrice float64) {
         candles := make([]Candle, 100)
-        p := basePrice * 0.95
+        // Start exactly at basePrice and random-walk both directions so the
+        // initial RSI distribution is centered (no upward/downward bias).
+        // Use 5× volatility per candle to ensure realistic RSI range across 100
+        // candles — each simulated candle represents 10 real ticks of movement.
+        p := basePrice
+        vol := volatility[symbol] * 5
         now := time.Now()
         for i := 0; i < 100; i++ {
-                vol := volatility[symbol]
                 change := (m.rng.Float64()*2 - 1) * vol * p
                 o := p
                 c := p + change
-                h := math.Max(o, c) * (1 + m.rng.Float64()*vol*0.5)
-                l := math.Min(o, c) * (1 - m.rng.Float64()*vol*0.5)
+                if c < 0.001 {
+                        c = 0.001
+                }
+                h := math.Max(o, c) * (1 + m.rng.Float64()*vol*0.3)
+                l := math.Min(o, c) * (1 - m.rng.Float64()*vol*0.3)
                 candles[i] = Candle{
                         Timestamp: now.Add(time.Duration(-100+i) * time.Minute * candleIntervalTicks),
                         Open:      o,
